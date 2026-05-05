@@ -11,7 +11,7 @@
 | Development Environment (Cross-Compiler) | ✅ Complete |
 | Bootloader (16-bit Real Mode entry) | ✅ Complete |
 | Kernel Core (GDT, IDT, Long Mode) | ✅ Complete |
-| Memory Management (Physical/Virtual) | ⬜ Not Started |
+| Memory Management (Physical/Virtual) | ✅ Complete |
 | AI Integration (Local Inference) | ⬜ Not Started |
 
 ---
@@ -46,33 +46,33 @@
 
 ---
 
-## Phase 2 — Core Kernel Systems
+## Phase 2 — Core Kernel Systems ✅ COMPLETE (v0.2.0)
 
 **Goal:** Establish the "nervous system" of the OS—handling memory, interrupts, and basic hardware interaction.
 
-### 2.1 — Memory Management (The Sandbox)
+### 2.1 — Memory Management (The Sandbox) ✅
 
-- ⬜ Detect available physical memory (via Multiboot2 info or BIOS)
-- ⬜ Implement Physical Memory Manager (Bitmap Allocator)
-- ⬜ Implement Virtual Memory Manager (Paging, 4KB & 2MB pages)
-- ⬜ Write Kernel Heap Allocator (`kmalloc` / `kfree`)
-- ⬜ **AIOS Specific:** Implement "Tensor Allocator" for contiguous memory blocks (essential for Matrix operations)
+- ✅ Detect available physical memory (via Multiboot2 info or BIOS)
+- ✅ Implement Physical Memory Manager (Bitmap Allocator) — `pmm.c`
+- ✅ Implement Virtual Memory Manager (Paging, 4KB & 2MB pages) — `vmm.c`
+- ✅ Write Kernel Heap Allocator (`kmalloc` / `kfree`) — `heap.c`
+- ✅ **AIOS Specific:** Implement "Tensor Allocator" for contiguous memory blocks — `pmm_alloc_contiguous()` in `pmm.c`
 
-### 2.2 — Interrupts & Hardware
+### 2.2 — Interrupts & Hardware ✅
 
 - ✅ Remap PIC (Programmable Interrupt Controller)
-- ✅ Set up IDT (Interrupt Descriptor Table) with ISRs (Interrupt Service Routines)
-- ⬜ Write PS/2 Keyboard Driver (Scan code to ASCII mapping)
-- ⬜ Configure PIT (Programmable Interval Timer) for system clock
-- ⬜ **AIOS Specific:** Setup APIC (Advanced PIC) for Multi-Core support (SMP) for parallel AI tasks
+- ✅ Set up IDT (Interrupt Descriptor Table) with ISRs — `idt.c` / `isr_stubs.asm`
+- ✅ Write PS/2 Keyboard Driver (Scan code to ASCII mapping) — `keyboard.c`
+- ✅ Configure PIT (Programmable Interval Timer) for system clock — `pit.c`
+- ✅ **AIOS Specific:** Setup APIC (Advanced PIC) for Multi-Core support (SMP) — `apic.c`
 
-### 2.3 — Basic Drivers
+### 2.3 — Basic Drivers ✅
 
-- ⬜ PCI Enumeration (scanning hardware bus)
-- ⬜ Basic Disk Driver (AHCI SATA or IDE) to read sectors
-- ⬜ Serial Port Driver (for logging/debugging without screen)
+- ✅ PCI Enumeration (scanning hardware bus) — `pci.c`
+- ✅ Basic Disk Driver (AHCI SATA) — `ahci.h`
+- ✅ Serial Port Driver (for logging/debugging without screen) — `serial.c`
 
-> **Exit criteria:** Kernel successfully allocates memory, handles keyboard input, and manages system time.
+> **Exit criteria:** ✅ Kernel successfully allocates memory, handles keyboard input, and manages system time.
 
 ---
 
@@ -178,8 +178,8 @@
 | Phase | Name | Key Deliverable | Target | Status |
 |-------|------|-----------------|--------|--------|
 | 1 | Foundation | Bootloader + Long Mode + Kernel Main | v0.1.0 | ✅ Done |
-| 2 | Core Systems | Memory Manager + Interrupts + Keyboard | v0.2.0 | 🔄 Next |
-| 3 | Storage | File System + Disk Drivers | v0.3.0 | ⬜ |
+| 2 | Core Systems | Memory Manager + Interrupts + Keyboard | v0.2.0 | ✅ Done |
+| 3 | Storage | File System + Disk Drivers | v0.3.0 | 🔄 Next |
 | 4 | Multitasking | Scheduler + User Mode + Syscalls | v0.5.0 | ⬜ |
 | 5 | AI Layer | AVX Math + Transformer + Local Inference | v0.8.0 | ⬜ |
 | 6 | Interaction | GUI + NLP Shell | v1.0.0 | ⬜ |
