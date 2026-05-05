@@ -47,7 +47,7 @@ void heap_init(uint64_t heap_start, size_t heap_size)
 
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts("  [ OK ] Kernel heap initialised (");
-    vga_putu64(heap_size / 1024);
+    vga_putdec(heap_size / 1024);
     vga_puts(" KB)\n");
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
 }
@@ -133,10 +133,10 @@ void heap_dump_stats(void)
         cur = cur->next;
     }
     vga_puts("Heap: blocks=");
-    vga_putu64(blocks);
+    vga_putdec(blocks);
     vga_puts(" used=");
-    vga_putu64(total_used);
+    vga_putdec(total_used);
     vga_puts(" free=");
-    vga_putu64(total_free);
+    vga_putdec(total_free);
     vga_puts("\n");
 }

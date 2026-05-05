@@ -1,59 +1,131 @@
 ; ============================================================
-; AIOS — Kernel Entry Point
-; Multiboot2 header + 64-bit Long Mode entry
-; NASM syntax, ELF64 output
+; AIOS — Kernel Entry (Multiboot2 → Long Mode, FIXED)
 ; ============================================================
 
 bits 32
 
-; ── Multiboot2 constants ────────────────────────────────────
-MB2_MAGIC       equ 0xE85250D6
-MB2_ARCH_X86    equ 0
-MB2_HEADER_LEN  equ (mb2_header_end - mb2_header_start)
-MB2_CHECKSUM    equ -(MB2_MAGIC + MB2_ARCH_X86 + MB2_HEADER_LEN)
-
 section .multiboot2
 align 8
-mb2_header_start:
-    dd MB2_MAGIC
-    dd MB2_ARCH_X86
-    dd MB2_HEADER_LEN
-    dd MB2_CHECKSUM
-    ; End tag
-    dw 0                ; type
-    dw 0                ; flags
-    dd 8                ; size
-mb2_header_end:
+    dd 0xE85250D6
+    dd 0
+    dd header_end - header_start
+    dd -(0xE85250D6 + 0 + (header_end - header_start))
+header_start:
+    dw 0
+    dw 0
+    dd 8
+header_end:
 
-; ── Entry point ─────────────────────────────────────────────
 section .text
 global kernel_entry
 extern kernel_main
-extern gdt_flush
-extern idt_flush
 
 kernel_entry:
-    ; Set up stack (defined in linker script)
+    cli
+
+    ; -------------------------------
+    ; setup stack
+    ; -------------------------------
     mov esp, stack_top
 
-    ; Save Multiboot2 magic and info pointer
-    push ebx            ; Multiboot2 info struct pointer
-    push eax            ; Multiboot2 magic value
+    ; -------------------------------
+    ; setup paging (identity map 2MB)
+    ; -------------------------------
 
-    ; Call C kernel
+    ; PML4 → PDPT
+    mov eax, pdpt_table
+    or eax, 0b11
+    mov [pml4_table], eax
+
+    ; PDPT → PD
+    mov eax, pd_table
+    or eax, 0b11
+    mov [pdpt_table], eax
+
+    ; PD entry (2MB page)
+    mov eax, 0x00000083      ; present + rw + huge page
+    mov [pd_table], eax
+
+    ; -------------------------------
+    ; enable long mode
+    ; -------------------------------
+
+    mov eax, pml4_table
+    mov cr3, eax
+
+    mov eax, cr4
+    or eax, 1 << 5           ; enable PAE
+    mov cr4, eax
+
+    mov ecx, 0xC0000080      ; EFER
+    rdmsr
+    or eax, 1 << 8           ; LME
+    wrmsr
+
+    mov eax, cr0
+    or eax, 1 << 31          ; paging
+    mov cr0, eax
+
+    ; -------------------------------
+    ; load GDT and jump to 64-bit
+    ; -------------------------------
+    lgdt [gdt64.pointer]
+    jmp 0x08:long_mode_entry
+
+
+; ============================================================
+; 64-bit code
+; ============================================================
+bits 64
+
+long_mode_entry:
+    mov rsp, stack_top
+
     call kernel_main
 
-    ; If kernel_main returns, halt forever
-.halt:
+.hang:
     cli
     hlt
-    jmp .halt
+    jmp .hang
 
-; ── Stack (referenced by linker script) ─────────────────────
+
+; ============================================================
+; paging structures
+; ============================================================
+section .bss
+align 4096
+
+pml4_table:
+    resq 512
+
+pdpt_table:
+    resq 512
+
+pd_table:
+    resq 512
+
+
+; ============================================================
+; GDT (64-bit)
+; ============================================================
+section .rodata
+
+gdt64:
+    dq 0
+    dq 0x00AF9A000000FFFF   ; code segment
+    dq 0x00AF92000000FFFF   ; data segment
+
+.pointer:
+    dw $ - gdt64 - 1
+    dq gdt64
+
+
+; ============================================================
+; stack
+; ============================================================
 section .bss
 align 16
-global stack_bottom
-global stack_top
+
 stack_bottom:
-    resb 16384          ; 16 KiB kernel stack
+    resb 16384
 stack_top:

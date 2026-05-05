@@ -50,7 +50,7 @@ void pmm_init(uint64_t mmap_addr, uint32_t mmap_len,
 
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts("  [ OK ] PMM initialised — ");
-    vga_putu64(free_frames * 4 / 1024);
+    vga_putdec(free_frames * 4 / 1024);
     vga_puts(" MB free\n");
     vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
 }
@@ -116,10 +116,10 @@ uint64_t pmm_get_free_pages(void)  { return free_frames; }
 void pmm_dump_stats(void)
 {
     vga_puts("PMM: total=");
-    vga_putu64(total_frames);
+    vga_putdec(total_frames);
     vga_puts(" free=");
-    vga_putu64(free_frames);
+    vga_putdec(free_frames);
     vga_puts(" used=");
-    vga_putu64(total_frames - free_frames);
+    vga_putdec(total_frames - free_frames);
     vga_puts("\n");
 }
