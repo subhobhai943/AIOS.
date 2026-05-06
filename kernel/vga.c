@@ -1,137 +1,153 @@
 /* ============================================================
- * AIOS — VGA Text Mode Driver
- * Writes directly to the VGA text buffer at 0xB8000
- * 80x25, 16 colors, no BIOS dependency
+ * AIOS — VGA Text Mode Driver  (80×25, colour)
+ * Provides: vga_init, vga_putchar, vga_puts, vga_puts_color,
+ *           vga_puthex, vga_putdec, vga_backspace,
+ *           vga_set_cursor_pos, vga_clear
  * ============================================================ */
 
 #include "include/vga.h"
 #include <stdint.h>
 #include <stddef.h>
 
-/* I/O port helpers (no stdlib) */
+/* ── Hardware constants ──────────────────────────────────── */
+#define VGA_WIDTH    80
+#define VGA_HEIGHT   25
+#define VGA_MEMORY   ((volatile uint16_t *)0xB8000)
+
+#define VGA_REG_CTRL  0x3D4
+#define VGA_REG_DATA  0x3D5
+
+/* ── State ───────────────────────────────────────────────── */
+static size_t    col  = 0;
+static size_t    row  = 0;
+static uint8_t   color;
+static volatile uint16_t *vga_buf;
+
+/* ── I/O helpers ─────────────────────────────────────────── */
 static inline void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
-
-static volatile uint16_t *const VGA_MEM = (volatile uint16_t*)0xB8000;
-
-/* Driver state */
-static size_t   vga_col   = 0;
-static size_t   vga_row   = 0;
-static uint8_t  vga_attr  = 0;  /* fg | (bg << 4) */
-
-/* ── Helpers ──────────────────────────────────────────────── */
-static inline uint8_t make_attr(vga_color_t fg, vga_color_t bg) {
-    return (uint8_t)(fg | (bg << 4));
+static inline uint8_t inb(uint16_t port) {
+    uint8_t v; __asm__ volatile ("inb %1, %0" : "=a"(v) : "Nd"(port)); return v;
 }
 
-static inline uint16_t make_entry(char c, uint8_t attr) {
-    return (uint16_t)(uint8_t)c | ((uint16_t)attr << 8);
+/* ── Helpers ─────────────────────────────────────────────── */
+static inline uint16_t vga_entry(unsigned char c, uint8_t col_attr) {
+    return (uint16_t)c | ((uint16_t)col_attr << 8);
+}
+static inline uint8_t vga_color(vga_color_t fg, vga_color_t bg) {
+    return (uint8_t)fg | ((uint8_t)bg << 4);
 }
 
-/* Update hardware cursor via VGA CRTC registers */
+/* ── Hardware cursor ─────────────────────────────────────── */
 static void hw_cursor_update(void) {
-    uint16_t pos = (uint16_t)(vga_row * VGA_WIDTH + vga_col);
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+    uint16_t pos = (uint16_t)(row * VGA_WIDTH + col);
+    outb(VGA_REG_CTRL, 0x0F); outb(VGA_REG_DATA, (uint8_t)(pos & 0xFF));
+    outb(VGA_REG_CTRL, 0x0E); outb(VGA_REG_DATA, (uint8_t)((pos >> 8) & 0xFF));
 }
 
-/* Scroll the screen up by one row */
-static void vga_scroll(void) {
-    /* Move rows 1..24 up by one */
-    for (size_t row = 1; row < VGA_HEIGHT; row++) {
-        for (size_t col = 0; col < VGA_WIDTH; col++) {
-            VGA_MEM[(row - 1) * VGA_WIDTH + col] =
-                VGA_MEM[row * VGA_WIDTH + col];
-        }
-    }
-    /* Clear last row */
-    for (size_t col = 0; col < VGA_WIDTH; col++) {
-        VGA_MEM[(VGA_HEIGHT - 1) * VGA_WIDTH + col] =
-            make_entry(' ', vga_attr);
-    }
-    vga_row = VGA_HEIGHT - 1;
+/* Enable blinking hardware text cursor */
+static void hw_cursor_enable(void) {
+    outb(VGA_REG_CTRL, 0x0A);
+    outb(VGA_REG_DATA, (inb(VGA_REG_DATA) & 0xC0) | 0x0D);   /* scanline 13 */
+    outb(VGA_REG_CTRL, 0x0B);
+    outb(VGA_REG_DATA, (inb(VGA_REG_DATA) & 0xE0) | 0x0F);   /* scanline 15 */
 }
 
-/* ── Public API ───────────────────────────────────────────── */
+/* ── Scroll one line ─────────────────────────────────────── */
+static void scroll(void) {
+    for (size_t r = 1; r < VGA_HEIGHT; r++)
+        for (size_t c = 0; c < VGA_WIDTH; c++)
+            vga_buf[(r-1)*VGA_WIDTH + c] = vga_buf[r*VGA_WIDTH + c];
+    for (size_t c = 0; c < VGA_WIDTH; c++)
+        vga_buf[(VGA_HEIGHT-1)*VGA_WIDTH + c] = vga_entry(' ', color);
+    row = VGA_HEIGHT - 1;
+}
+
+/* ── vga_init ────────────────────────────────────────────── */
 void vga_init(void) {
-    vga_attr = make_attr(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-    vga_clear();
-}
+    vga_buf = VGA_MEMORY;
+    color   = vga_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    col = row = 0;
 
-void vga_set_color(vga_color_t fg, vga_color_t bg) {
-    vga_attr = make_attr(fg, bg);
-}
+    /* Clear screen */
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        vga_buf[i] = vga_entry(' ', color);
 
-void vga_clear(void) {
-    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
-        VGA_MEM[i] = make_entry(' ', vga_attr);
-    }
-    vga_col = 0;
-    vga_row = 0;
+    hw_cursor_enable();
     hw_cursor_update();
 }
 
+/* ── vga_clear ───────────────────────────────────────────── */
+void vga_clear(void) {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        vga_buf[i] = vga_entry(' ', color);
+    col = row = 0;
+    hw_cursor_update();
+}
+
+/* ── vga_set_color ───────────────────────────────────────── */
+void vga_set_color(vga_color_t fg, vga_color_t bg) {
+    color = vga_color(fg, bg);
+}
+
+/* ── vga_set_cursor_pos ──────────────────────────────────── */
+void vga_set_cursor_pos(size_t c, size_t r) {
+    col = c; row = r;
+    hw_cursor_update();
+}
+
+/* ── vga_putchar ─────────────────────────────────────────── */
 void vga_putchar(char c) {
     if (c == '\n') {
-        vga_col = 0;
-        vga_row++;
+        col = 0;
+        if (++row >= VGA_HEIGHT) scroll();
     } else if (c == '\r') {
-        vga_col = 0;
+        col = 0;
     } else if (c == '\t') {
-        /* 4-space tab */
-        size_t next = (vga_col + 4) & ~3u;
-        while (vga_col < next) vga_putchar(' ');
-        return;
+        col = (col + 8) & ~7u;
+        if (col >= VGA_WIDTH) { col = 0; if (++row >= VGA_HEIGHT) scroll(); }
+    } else if (c == '\b') {
+        if (col > 0) { col--; }
+        else if (row > 0) { row--; col = VGA_WIDTH - 1; }
+        vga_buf[row * VGA_WIDTH + col] = vga_entry(' ', color);
     } else {
-        VGA_MEM[vga_row * VGA_WIDTH + vga_col] = make_entry(c, vga_attr);
-        vga_col++;
-    }
-
-    if (vga_col >= VGA_WIDTH) {
-        vga_col = 0;
-        vga_row++;
-    }
-    if (vga_row >= VGA_HEIGHT) {
-        vga_scroll();
+        vga_buf[row * VGA_WIDTH + col] = vga_entry((unsigned char)c, color);
+        if (++col >= VGA_WIDTH) { col = 0; if (++row >= VGA_HEIGHT) scroll(); }
     }
     hw_cursor_update();
 }
 
-void vga_puts(const char *str) {
-    while (*str) vga_putchar(*str++);
+/* ── vga_backspace (public helper for keyboard echo) ─────── */
+void vga_backspace(void) {
+    vga_putchar('\b');
 }
 
-void vga_puts_color(const char *str, vga_color_t fg, vga_color_t bg) {
-    uint8_t saved = vga_attr;
-    vga_set_color(fg, bg);
-    vga_puts(str);
-    vga_attr = saved;
+/* ── vga_puts ────────────────────────────────────────────── */
+void vga_puts(const char *s) {
+    while (*s) vga_putchar(*s++);
 }
 
-void vga_puthex(uint64_t value) {
-    const char *hex = "0123456789ABCDEF";
+/* ── vga_puts_color ──────────────────────────────────────── */
+void vga_puts_color(const char *s, vga_color_t fg, vga_color_t bg) {
+    uint8_t saved = color;
+    color = vga_color(fg, bg);
+    while (*s) vga_putchar(*s++);
+    color = saved;
+}
+
+/* ── vga_puthex ──────────────────────────────────────────── */
+void vga_puthex(uint64_t val) {
+    static const char hex[] = "0123456789ABCDEF";
     vga_puts("0x");
-    for (int i = 60; i >= 0; i -= 4) {
-        vga_putchar(hex[(value >> i) & 0xF]);
-    }
+    for (int i = 60; i >= 0; i -= 4)
+        vga_putchar(hex[(val >> i) & 0xF]);
 }
 
-void vga_putdec(uint64_t value) {
-    if (value == 0) { vga_putchar('0'); return; }
-    char buf[21];
-    int  idx = 0;
-    while (value > 0) {
-        buf[idx++] = (char)('0' + (value % 10));
-        value /= 10;
-    }
-    for (int i = idx - 1; i >= 0; i--) vga_putchar(buf[i]);
-}
-
-void vga_set_cursor(size_t col, size_t row) {
-    vga_col = col;
-    vga_row = row;
-    hw_cursor_update();
+/* ── vga_putdec ──────────────────────────────────────────── */
+void vga_putdec(uint64_t val) {
+    if (val == 0) { vga_putchar('0'); return; }
+    char buf[20]; int i = 0;
+    while (val > 0) { buf[i++] = '0' + (char)(val % 10); val /= 10; }
+    while (i--) vga_putchar(buf[i]);
 }

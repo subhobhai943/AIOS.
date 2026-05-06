@@ -4,12 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* VGA text buffer: 80 columns × 25 rows at physical 0xB8000 */
-#define VGA_WIDTH   80
-#define VGA_HEIGHT  25
-#define VGA_BASE    ((volatile uint16_t*)0xB8000)
-
-/* VGA color codes */
+/* VGA colour palette */
 typedef enum {
     VGA_COLOR_BLACK         = 0,
     VGA_COLOR_BLUE          = 1,
@@ -25,18 +20,19 @@ typedef enum {
     VGA_COLOR_LIGHT_CYAN    = 11,
     VGA_COLOR_LIGHT_RED     = 12,
     VGA_COLOR_LIGHT_MAGENTA = 13,
-    VGA_COLOR_LIGHT_BROWN   = 14,
+    VGA_COLOR_BROWN_YELLOW  = 14,
     VGA_COLOR_WHITE         = 15,
 } vga_color_t;
 
 void vga_init(void);
-void vga_set_color(vga_color_t fg, vga_color_t bg);
 void vga_clear(void);
+void vga_set_color(vga_color_t fg, vga_color_t bg);
+void vga_set_cursor_pos(size_t col, size_t row);
 void vga_putchar(char c);
-void vga_puts(const char *str);
-void vga_puts_color(const char *str, vga_color_t fg, vga_color_t bg);
-void vga_puthex(uint64_t value);
-void vga_putdec(uint64_t value);
-void vga_set_cursor(size_t col, size_t row);
+void vga_backspace(void);          /* erase last typed character */
+void vga_puts(const char *s);
+void vga_puts_color(const char *s, vga_color_t fg, vga_color_t bg);
+void vga_puthex(uint64_t val);
+void vga_putdec(uint64_t val);
 
 #endif /* VGA_H */
