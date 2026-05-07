@@ -6,7 +6,7 @@
 *A bare-metal OS with a local LLM as its core intelligence engine*
 
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](./LICENSE)
-[![Phase](https://img.shields.io/badge/phase-2%20%E2%80%94%20Core%20Systems-brightgreen.svg)](#roadmap-progress)
+[![Phase](https://img.shields.io/badge/phase-1%20%E2%80%94%20Foundation-brightgreen.svg)](#roadmap-progress)
 [![Architecture](https://img.shields.io/badge/arch-x86__64-blue.svg)](#)
 [![Language](https://img.shields.io/badge/language-C%20%2F%20Assembly-orange.svg)](#)
 
@@ -27,8 +27,8 @@ AIOS is not an OS that runs AI applications. AIOS *is* the AI. The kernel, sched
 | Phase | Name | Deliverable | Version | Status |
 |-------|------|-------------|---------|--------|
 | 1 | Foundation | Bootloader + Long Mode + Kernel | v0.1.0 | ✅ Complete |
-| 2 | Core Systems | Memory Manager + Interrupts + Keyboard | v0.2.0 | ✅ Complete |
-| 3 | Storage | File System + Disk Drivers | v0.3.0 | 🔄 Next |
+| 2 | Core Systems | Memory Manager + Interrupts + Keyboard | v0.2.0 | 🔄 Next |
+| 3 | Storage | File System + Disk Drivers | v0.3.0 | ⬜ |
 | 4 | Multitasking | Scheduler + User Mode + Syscalls | v0.5.0 | ⬜ |
 | 5 | AI Layer | AVX Math + Transformer + Local Inference | v0.8.0 | ⬜ |
 | 6 | Interaction | GUI + NLP Shell | v1.0.0 | ⬜ |
@@ -51,7 +51,7 @@ AIOS is not an OS that runs AI applications. AIOS *is* the AI. The kernel, sched
 │              File System (Phase 3)               │
 │         FAT32 │ VFS │ Tensor Partition Format    │
 ├─────────────────────────────────────────────────┤
-│          Core Kernel Systems (Phase 2) ✅         │
+│           Core Kernel Systems (Phase 2)          │
 │   PMM │ VMM │ kmalloc │ Keyboard │ PIT │ PCI     │
 ├─────────────────────────────────────────────────┤
 │            Foundation — Phase 1 ✅               │
@@ -59,36 +59,6 @@ AIOS is not an OS that runs AI applications. AIOS *is* the AI. The kernel, sched
 └─────────────────────────────────────────────────┘
               x86_64 Bare Metal Hardware
 ```
-
----
-
-## What's Built (Phase 2 — v0.2.0) ✅
-
-### 2.1 — Memory Management
-
-| File | Description |
-|------|-------------|
-| `pmm.c` / `pmm.h` | Physical Memory Manager — bitmap allocator, Multiboot2 memory map parsing, 1M frame support |
-| `vmm.c` / `vmm.h` | Virtual Memory Manager — 4-level paging (PML4), `map`/`unmap`/`virt_to_phys`, TLB flush |
-| `heap.c` / `heap.h` | Kernel heap — `kmalloc` / `kfree` with free-list allocator |
-| `pmm_alloc_contiguous()` | **AIOS Tensor Allocator** — allocates contiguous physical pages for matrix operations |
-
-### 2.2 — Interrupts & Hardware
-
-| File | Description |
-|------|-------------|
-| `idt.c` / `isr_stubs.asm` | Full IDT (256 gates), PIC remapped, ISR stubs |
-| `keyboard.c` / `keyboard.h` | PS/2 keyboard driver — scan code → ASCII, shift/caps support |
-| `pit.c` / `pit.h` | PIT (Programmable Interval Timer) — system clock at configurable Hz |
-| `apic.c` / `apic.h` | **AIOS APIC** — Advanced PIC setup for multi-core SMP (parallel AI tasks) |
-
-### 2.3 — Basic Drivers
-
-| File | Description |
-|------|-------------|
-| `pci.c` / `pci.h` | PCI bus enumeration — scans all devices, reads vendor/class IDs |
-| `ahci.h` | AHCI SATA disk driver header — disk sector read/write interface |
-| `serial.c` / `serial.h` | Serial port (COM1) driver — kernel debug logging without screen |
 
 ---
 
@@ -145,28 +115,22 @@ cd AIOS.
 ./build.sh clean
 ```
 
-### Expected Output (Phase 2 — v0.2.0)
+### Expected Output
 
 ```
 ======================================================
    AIOS — Autonomous Intelligent Operating System
-   Phase 2: Core Kernel Systems
+   Phase 1: Foundation
 ======================================================
 
   [ OK ] Multiboot2 handoff verified
   [ OK ] GDT loaded (null / kernel-code / kernel-data / user-code / user-data)
   [ OK ] IDT loaded, PIC remapped (IRQ0-15 → INT 0x20-0x2F)
   [ OK ] STI — interrupts enabled
-  [ OK ] PMM initialised — 126 MB free
-  [ OK ] VMM initialised (4-level paging active)
-  [ OK ] Heap initialised
-  [ OK ] PIT configured — 1000 Hz system clock
-  [ OK ] Keyboard driver active
-  [ OK ] APIC initialised (SMP ready)
-  [ OK ] PCI bus enumerated
-  [ OK ] Serial port (COM1) active
 
-  AIOS Initialized — Phase 2 Complete. Ready for Phase 3 (Storage & Filesystem).
+  AIOS Initialized
+
+  Roadmap Phase 1 complete. Ready for Phase 2 (Memory Management).
 ```
 
 ---
@@ -180,29 +144,24 @@ AIOS/
 ├── Makefile                    ← x86_64-elf cross-compiler build system
 ├── build.sh                    ← Quick-start: deps / run / debug / clean
 ├── ROADMAP/
-│   ├── ⚡ AIOS — Development Roadmap.md
-│   └── 🚀 AIOS: From Zero to Execution.md
+│   ├── ⚡ AIOS — Development Roadmap
+│   └── 🚀 AIOS: From Zero to Execution
 ├── boot/
 │   ├── kernel_entry.asm        ← Multiboot2 + stack + kernel_main call
 │   ├── linker.ld               ← Memory layout (kernel @ 1 MiB)
 │   └── grub.cfg                ← GRUB2 config
 ├── kernel/
 │   ├── kernel_main.c           ← Kernel entry point
-│   ├── vga.c / vga.h           ← VGA text driver
-│   ├── gdt.c / gdt.h           ← Global Descriptor Table
-│   ├── idt.c / idt.h           ← Interrupt Descriptor Table
+│   ├── vga.c                   ← VGA text driver
+│   ├── gdt.c                   ← Global Descriptor Table
+│   ├── idt.c                   ← Interrupt Descriptor Table
 │   ├── isr_stubs.asm           ← 256 ISR stubs
-│   ├── pmm.c / pmm.h           ← Physical Memory Manager (bitmap)
-│   ├── vmm.c / vmm.h           ← Virtual Memory Manager (4-level paging)
-│   ├── heap.c / heap.h         ← Kernel heap (kmalloc/kfree)
-│   ├── keyboard.c / keyboard.h ← PS/2 keyboard driver
-│   ├── pit.c / pit.h           ← Programmable Interval Timer
-│   ├── apic.c / apic.h         ← Advanced PIC (SMP support)
-│   ├── pci.c / pci.h           ← PCI bus enumeration
-│   ├── ahci.h                  ← AHCI SATA disk driver
-│   ├── serial.c / serial.h     ← Serial port (COM1) logging
 │   └── include/
+│       ├── vga.h
+│       ├── gdt.h
+│       └── idt.h
 └── docs/
+    └── PHASE1_NOTES.md
 ```
 
 ---
