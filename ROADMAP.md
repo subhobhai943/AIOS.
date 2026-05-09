@@ -64,10 +64,10 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### 1.1 — IDT (Interrupt Descriptor Table)
 - ✅ `kernel/idt.c` — IDT setup code exists
 - ✅ `kernel/isr_stubs.asm` — ISR assembly stubs exist
-- ⬜ All 256 IDT entries populated (0–31 CPU exceptions, 32–47 IRQs, rest as spurious)
-- ⬜ Exception handlers print register dump + halt (for debugging panics)
-- ⬜ `idt_flush()` calls `lidt` correctly
-- ⬜ Test: trigger a divide-by-zero (#DE), confirm handler catches it without triple fault
+- ✅ All 256 IDT entries populated (0–31 CPU exceptions, 32–47 IRQs, rest as spurious)
+- ✅ Exception handlers print register dump + halt (for debugging panics)
+- ✅ `idt_flush()` calls `lidt` correctly
+- ✅ Test: trigger a divide-by-zero (#DE), confirm handler catches it without triple fault
 
 ### 1.2 — PIC / APIC
 - ✅ `kernel/apic.c` — APIC code exists
@@ -535,7 +535,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Dep checker | `scripts/check_deps.sh` | ✅ Complete |
 | GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Fixed & Complete |
 | GDT | `kernel/gdt.c` | ✅ Complete — real TSS, far-jump CS reload, ltr |
-| IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | 🔄 Code exists, needs verification |
+| IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, idt_flush, #DE test |
 | APIC | `kernel/apic.c`, `kernel/apic.h` | 🔄 Code exists |
 | PIT | `kernel/pit.c`, `kernel/pit.h` | 🔄 Code exists |
 | VGA | `kernel/vga.c` | 🔄 Code exists |
@@ -547,7 +547,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc, PMM_ALLOC_FAIL sentinel |
 | VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map, safe walk |
 | Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, full coalesce, aligned alloc fixed |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 0.4 — wires PMM+VMM+heap, MB2 mmap tag walker |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 1.1 — IDT exception dump + #DE test wired |
 | kernel/include/ | Headers directory | 🔄 Exists |
 | Scheduler | — | ⬜ Not started |
 | Filesystem | — | ⬜ Not started |
@@ -560,13 +560,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### Immediate Next Steps (pick up here)
 
 1. **Confirm GRUB boots ISO in QEMU** — run `make run`, confirm it reaches `kernel_main` without crashing (Phase 0.2 last item)
-2. **Verify IDT** — all 256 entries populated, exception handlers dump registers + halt, `idt_flush()` calls `lidt` (Phase 1.1) ← **next coding task**
-3. **Test serial output** — run QEMU with `-serial stdio`, confirm boot messages appear (Phase 1.5)
-4. **Page fault handler** — install `#PF` handler that prints faulting CR2 + error code (Phase 2.2 remaining item)
-5. **Verify heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3 test item)
-6. **Create `ahci.c`** — Phase 3.2 is blocked on this
-7. **Create `kernel/fs/ext2.c`** — Phase 3.3, prerequisite for loading LLM weights from disk
-8. **Create `kernel/task.c`** — Phase 4.1, prerequisite for running LLM in background thread
+2. **PIC / APIC** — remap legacy PIC OR initialize Local APIC (Phase 1.2) ← **next coding task**
+3. **PIT timer** — configure channel 0 at 1000 Hz, wire IRQ0 handler, global tick counter (Phase 1.3)
+4. **VGA verification** — confirm `vga_putchar`, `vga_clear`, scrolling, color support all work (Phase 1.4)
+5. **Serial output** — COM1 at 115200 baud, run QEMU with `-serial stdio` (Phase 1.5)
+6. **Page fault handler** — install `#PF` handler that prints faulting CR2 + error code (Phase 2.2 remaining item)
+7. **Verify heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3 test item)
+8. **Create `ahci.c`** — Phase 3.2 is blocked on this
 
 ---
 
@@ -605,8 +605,8 @@ AIOS/
 ├── kernel/
 │   ├── kernel_main.c        ← C entry point
 │   ├── gdt.c / .h           ← Global Descriptor Table
-│   ├── idt.c                ← Interrupt Descriptor Table
-│   ├── isr_stubs.asm        ← ISR assembly trampolines
+│   ├── idt.c                ← Interrupt Descriptor Table ✅
+│   ├── isr_stubs.asm        ← ISR assembly trampolines ✅
 │   ├── apic.c / .h          ← Advanced PIC
 │   ├── pit.c / .h           ← Programmable Interval Timer
 │   ├── vga.c                ← VGA text mode
@@ -646,4 +646,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 0.4 complete. Memory Management (Phase 2) fully implemented. Next: IDT verification (Phase 1.1).*
+*Last updated: May 2026 — Phase 1.1 complete. IDT fully implemented with exception register dump, idt_flush(), #DE test. Next: Phase 1.2 (PIC/APIC).*
