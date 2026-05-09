@@ -1,6 +1,7 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 0.4 : Memory Management (PMM + VMM + Heap)
+ * Phase 1.1 : IDT — exception dump, idt_flush(), #DE test
+ * (Phase 0.4 memory management still intact)
  * ============================================================ */
 
 #include "include/vga.h"
@@ -23,15 +24,12 @@
 
 /* ---------------------------------------------------------------
  * Linker-exported kernel image bounds
- * (defined in the linker script as PROVIDE(_kernel_start / _end))
  * --------------------------------------------------------------- */
 extern uint8_t _kernel_start;
 extern uint8_t _kernel_end;
 
 /* ---------------------------------------------------------------
- * Heap location: place it right after the kernel image,
- * rounded up to the next page, inside the identity-mapped region.
- * Size: 2 MB — plenty for early kernel use.
+ * Heap location and size
  * --------------------------------------------------------------- */
 #define HEAP_SIZE   (2u * 1024u * 1024u)
 
@@ -71,22 +69,12 @@ static void print_fail(const char *msg)
 }
 
 /* ---------------------------------------------------------------
- * find_mmap_tag — walk the Multiboot2 info structure and return
- * the virtual address of the memory-map tag (type 6), or 0.
- *
- * MB2 info layout:
- *   uint32_t total_size
- *   uint32_t reserved
- *   tag[0], tag[1], ...   each 8-byte aligned
- * Each tag:
- *   uint32_t type
- *   uint32_t size
- *   ... payload ...
+ * find_mmap_tag
  * --------------------------------------------------------------- */
 static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
 {
     uint32_t total = *(uint32_t *)(uintptr_t)mb2_addr;
-    uint32_t off   = 8;   /* skip total_size + reserved */
+    uint32_t off   = 8;
 
     while (off < total) {
         uint32_t type = *(uint32_t *)(uintptr_t)(mb2_addr + off);
@@ -99,10 +87,39 @@ static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
             return (uint64_t)(mb2_addr + off);
         }
 
-        /* Tags are 8-byte aligned */
         off += (size + 7u) & ~7u;
     }
     return 0;
+}
+
+/* ---------------------------------------------------------------
+ * #DE TEST — custom handler for vector 0 (divide-by-zero)
+ *
+ * The CPU delivers #DE when DIV/IDIV divide by zero.  This handler
+ * prints a success banner and then RETURNS so the kernel continues
+ * booting — the handler adjusts RIP past the faulting instruction
+ * by adding 2 (the size of `div rcx` / `idiv` variants varies, but
+ * we just skip by setting RIP = RIP+2; since this is a controlled
+ * test inside kernel_main that is safe enough).
+ *
+ * In a real scenario you'd panic; here the point is to confirm the
+ * IDT fires without a triple-fault.
+ * --------------------------------------------------------------- */
+static void de_test_handler(interrupt_frame_t *frame)
+{
+    vga_puts_color(
+        "  [ OK ] #DE handler fired — vector=0x",
+        VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK
+    );
+    vga_puthex(frame->int_num);
+    vga_puts_color("  RIP=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puthex(frame->rip);
+    vga_putchar('\n');
+
+    /* Advance RIP past the faulting `div` instruction.
+     * `div rcx` encodes as 48 F7 F1 (3 bytes in 64-bit mode).
+     * We rely on the test below using exactly that form. */
+    frame->rip += 3;
 }
 
 /* ---------------------------------------------------------------
@@ -113,9 +130,6 @@ static void mouse_isr(interrupt_frame_t *f) { (void)f; mouse_handle_irq(); }
 
 /* ---------------------------------------------------------------
  * kernel_main
- *
- * magic : EAX value set by the Multiboot2 bootloader
- * addr  : EBX value — physical address of MB2 info structure
  * --------------------------------------------------------------- */
 void kernel_main(uint32_t magic, uint32_t addr)
 {
@@ -128,7 +142,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 0.4 : Memory Management\n",
+        "  Phase 1.1 : IDT + Exception Handling\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
@@ -146,11 +160,42 @@ void kernel_main(uint32_t magic, uint32_t addr)
     /* ---- GDT ------------------------------------------------- */
     gdt_init();
     print_ok("GDT: null/kcode/kdata/ucode/udata + TSS");
-    print_ok("CS reloaded (lretq), TSS loaded (ltr 0x28)");
 
     /* ---- IDT ------------------------------------------------- */
     idt_init();
-    print_ok("IDT loaded");
+    print_ok("IDT: 256 gates, PIC remapped, exception dump active");
+
+    /* ---- #DE Test -------------------------------------------- */
+    /*
+     * Register a temporary handler for vector 0 (#DE) that
+     * acknowledges the exception and advances RIP so we continue.
+     * After the test we restore the default (NULL = panic dump).
+     */
+    idt_register_handler(0, de_test_handler);
+
+    vga_puts_color(
+        "  [TEST] Triggering divide-by-zero (#DE)...\n",
+        VGA_COLOR_BROWN, VGA_COLOR_BLACK
+    );
+
+    /*
+     * Inline assembly: set RCX=0, then execute `div rcx` (REX.W
+     * DIV r/m64 = 48 F7 F1).  This raises #DE immediately.
+     * The de_test_handler advances RIP by 3 so execution resumes
+     * at the instruction after `div rcx`.
+     */
+    __asm__ volatile (
+        "xor %%rcx, %%rcx  \n"
+        "div %%rcx         \n"   /* 48 F7 F1 — raises #DE */
+        :
+        :
+        : "rax", "rdx", "rcx"
+    );
+
+    print_ok("#DE test PASSED — IDT catches exception, returns to caller");
+
+    /* Remove the test handler; from here on #DE → panic dump */
+    idt_register_handler(0, 0);
 
     /* ---- PMM ------------------------------------------------- */
     if (magic == MULTIBOOT2_MAGIC) {
@@ -172,11 +217,6 @@ void kernel_main(uint32_t magic, uint32_t addr)
     print_ok("VMM: 4-level paging, identity mapped first 64 MB");
 
     /* ---- Heap ------------------------------------------------ */
-    /*
-     * Place the heap immediately after the kernel image, rounded
-     * up to the next page boundary.  It stays inside the 64 MB
-     * identity-mapped window so virtual == physical here.
-     */
     uint64_t kend_aligned = ((uint64_t)(uintptr_t)&_kernel_end
                              + PAGE_SIZE - 1) & ~(uint64_t)(PAGE_SIZE - 1);
     heap_init(kend_aligned, HEAP_SIZE);
