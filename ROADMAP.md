@@ -35,17 +35,17 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `boot/linker.ld` — linker script for kernel binary layout
 - ✅ `.github/` — CI/CD workflows directory exists
 - ⬜ Verify NASM + GCC cross-compiler (`x86_64-elf-gcc`) toolchain documented in README
-- ⬜ Add `scripts/check_deps.sh` — script that checks all required build tools and prints missing ones
-- ⬜ Add QEMU launch target: `make run` launches `qemu-system-x86_64 -cdrom aios.iso`
-- ⬜ Add `make debug` target: QEMU + GDB remote on port 1234, symbol file loaded
+- ✅ Add `scripts/check_deps.sh` — script that checks all required build tools and prints missing ones
+- ✅ Add QEMU launch target: `make run` launches `qemu-system-x86_64 -cdrom aios.iso`
+- ✅ Add `make debug` target: QEMU + GDB remote on port 1234, symbol file loaded
 
 ### 0.2 — Bootloader / GRUB
 - ✅ `boot/grub.cfg` — GRUB config file exists
 - ✅ `boot/kernel_entry.asm` — kernel entry assembly (Multiboot2 header + jump to C)
-- ⬜ Verify Multiboot2 magic number (`0xE85250D6`) is in `kernel_entry.asm`
-- ⬜ Verify multiboot info pointer is passed to `kernel_main` in RDI
-- ⬜ Set up a valid stack (at least 16KB) before calling C code
-- ⬜ Enable SSE/SSE2 via CR0/CR4 flags in entry assembly (required for float ops in LLM later)
+- ✅ Verify Multiboot2 magic number (`0xE85250D6`) is in `kernel_entry.asm`
+- ✅ Verify multiboot info pointer is passed to `kernel_main` in RDI
+- ✅ Set up a valid stack (at least 16KB) before calling C code
+- ✅ Enable SSE/SSE2 via CR0/CR4 flags in entry assembly (required for float ops in LLM later)
 - ⬜ Confirm GRUB boots ISO in QEMU without crashing
 
 ### 0.3 — GDT (Global Descriptor Table)
@@ -517,7 +517,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Component | Files | Status |
 |-----------|-------|--------|
 | Build system | `build.sh`, `Makefile`, `boot/linker.ld` | ✅ Scaffolded |
-| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Scaffolded |
+| Dep checker | `scripts/check_deps.sh` | ✅ Complete |
+| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Fixed & Complete |
 | GDT | `kernel/gdt.c` | 🔄 Code exists, needs verification |
 | IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | 🔄 Code exists, needs verification |
 | APIC | `kernel/apic.c`, `kernel/apic.h` | 🔄 Code exists |
@@ -543,14 +544,15 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Boot the kernel in QEMU** — run `make run` or `./build.sh` and confirm it reaches `kernel_main`
-2. **Verify GDT + IDT** — trigger a divide-by-zero, confirm the handler catches it (not a triple fault)
-3. **Test serial output** — run QEMU with `-serial stdio`, confirm boot messages appear
-4. **Verify PMM** — call `pmm_alloc_page()` 10 times, print addresses, confirm they don't overlap
-5. **Verify VMM + heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash
-6. **Create `ahci.c`** — Phase 3.2 is blocked on this
-7. **Create `kernel/fs/ext2.c`** — Phase 3.3, prerequisite for loading LLM weights from disk
-8. **Create `kernel/task.c`** — Phase 4.1, prerequisite for running LLM in background thread
+1. **Confirm GRUB boots ISO in QEMU** — run `make run`, confirm it reaches `kernel_main` without crashing (Phase 0.2 last item)
+2. **Verify GDT** (`kernel/gdt.c`) — ensure null + kernel code + kernel data + user code + user data + TSS descriptors exist, `gdt_flush()` does `lgdt` + far-jump, TSS loaded with `ltr` (Phase 0.3)
+3. **Verify IDT** — all 256 entries populated, exception handlers dump registers + halt, `idt_flush()` calls `lidt` (Phase 1.1)
+4. **Test serial output** — run QEMU with `-serial stdio`, confirm boot messages appear (Phase 1.5)
+5. **Verify PMM** — call `pmm_alloc_page()` 10 times, print addresses, confirm no overlaps (Phase 2.1)
+6. **Verify VMM + heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3)
+7. **Create `ahci.c`** — Phase 3.2 is blocked on this
+8. **Create `kernel/fs/ext2.c`** — Phase 3.3, prerequisite for loading LLM weights from disk
+9. **Create `kernel/task.c`** — Phase 4.1, prerequisite for running LLM in background thread
 
 ---
 
@@ -560,7 +562,7 @@ When continuing work with an AI assistant, paste this at the start of your sessi
 
 ```
 We are building AIOS — an operating system from scratch with an integrated local LLM, also from scratch.
-Codebase: https://github.com/subhobhai943/AIOS.
+Codebase:  https://github.com/subhobhai943/AIOS..git
 Language: C (freestanding, no libc), NASM assembly.
 Check ROADMAP.md for current progress. Continue from the first unchecked ⬜ item in the current phase.
 Do not use any standard library headers except <stdint.h>, <stddef.h>, <stdbool.h>.
@@ -580,9 +582,11 @@ AIOS/
 ├── build.sh
 ├── .gitignore
 ├── LICENSE
+├── scripts/
+│   └── check_deps.sh        ← Dependency checker (run before first build)
 ├── boot/
 │   ├── grub.cfg             ← GRUB boot config
-│   ├── kernel_entry.asm     ← Multiboot2 entry, 64-bit mode setup
+│   ├── kernel_entry.asm     ← Multiboot2 entry, SSE/SSE2 enable, 64-bit mode
 │   └── linker.ld            ← Kernel binary layout
 ├── kernel/
 │   ├── kernel_main.c        ← C entry point
