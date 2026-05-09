@@ -63,19 +63,16 @@ void kernel_main(uint32_t magic, uint32_t addr)
         VGA_COLOR_LIGHT_CYAN,
         VGA_COLOR_BLACK
     );
-
     vga_puts_color(
-        " AIOS Autonomous Intelligent Operating System\n",
+        " AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE,
         VGA_COLOR_BLACK
     );
-
     vga_puts_color(
-        " Phase 1 : Foundation\n",
+        " Phase 0.3 : GDT + TSS\n",
         VGA_COLOR_LIGHT_GREEN,
         VGA_COLOR_BLACK
     );
-
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN,
@@ -83,10 +80,10 @@ void kernel_main(uint32_t magic, uint32_t addr)
     );
 
     /* -------------------------------------------------------- */
-    /* Multiboot */
+    /* Multiboot2 magic check */
 
     if (magic == MULTIBOOT2_MAGIC) {
-        print_ok("Multiboot2 verified");
+        print_ok("Multiboot2 magic verified");
     } else {
         vga_puts_color(
             "[WARN] Not booted via Multiboot2\n",
@@ -96,84 +93,63 @@ void kernel_main(uint32_t magic, uint32_t addr)
     }
 
     /* -------------------------------------------------------- */
-    /* GDT */
-
-    print_ok("before gdt");
+    /* GDT: null / kcode / kdata / ucode / udata / TSS
+     *
+     *  gdt_init() internally calls gdt_flush() (lgdt + far-return
+     *  to reload CS=0x08) and tss_load() (ltr).
+     *  If we reach print_ok below, no triple-fault occurred.      */
 
     gdt_init();
-
-    print_ok("after gdt");
+    print_ok("GDT loaded  (null/kcode/kdata/ucode/udata + TSS)");
+    print_ok("CS reloaded via far-return (lretq)");
+    print_ok("TSS loaded  (ltr  selector=0x28)");
 
     /* -------------------------------------------------------- */
     /* IDT */
 
-    print_ok("before idt");
-
     idt_init();
-
-    print_ok("after idt");
+    print_ok("IDT loaded");
 
     /* -------------------------------------------------------- */
-    /* KEYBOARD */
-
-    print_ok("before keyboard");
+    /* Keyboard + Mouse */
 
     idt_register_handler(0x21, kbd_isr);
-
     keyboard_init();
-
-    print_ok("after keyboard");
-
-    /* -------------------------------------------------------- */
-    /* MOUSE */
+    print_ok("Keyboard driver initialised");
 
     idt_register_handler(0x2C, mouse_isr);
-
     mouse_init();
-
-    print_ok("mouse initialized");
+    print_ok("Mouse driver initialised");
 
     /* -------------------------------------------------------- */
-    /* PIC UNMASK */
+    /* Unmask PIC IRQ1 (keyboard) + cascade IRQ2 + IRQ12 (mouse) */
 
     uint8_t mask1 = inb(PIC1_DATA);
     uint8_t mask2 = inb(PIC2_DATA);
-
-    mask1 &= ~(1 << 1);
-    mask1 &= ~(1 << 2);
-    mask2 &= ~(1 << 4);
-
+    mask1 &= ~(1u << 1);   /* IRQ1  — keyboard     */
+    mask1 &= ~(1u << 2);   /* IRQ2  — cascade line */
+    mask2 &= ~(1u << 4);   /* IRQ12 — mouse        */
     outb(PIC1_DATA, mask1);
     outb(PIC2_DATA, mask2);
-
-    print_ok("PIC IRQs unmasked");
+    print_ok("PIC IRQ1/IRQ2/IRQ12 unmasked");
 
     /* -------------------------------------------------------- */
-    /* ENABLE INTERRUPTS */
-
-    print_ok("before sti");
+    /* Enable interrupts */
 
     __asm__ volatile ("sti");
-
-    print_ok("interrupts enabled");
+    print_ok("Interrupts enabled (STI)");
 
     /* -------------------------------------------------------- */
 
     vga_putchar('\n');
-
     vga_puts_color(
-        "Keyboard + Mouse subsystem active\n",
-        VGA_COLOR_LIGHT_GREEN,
-        VGA_COLOR_BLACK
-    );
-
-    vga_puts_color(
-        "Type something...\n",
+        "Keyboard + Mouse active.  Type something...\n",
         VGA_COLOR_LIGHT_CYAN,
         VGA_COLOR_BLACK
     );
 
     /* -------------------------------------------------------- */
+    /* Idle loop */
 
     for (;;) {
         __asm__ volatile ("hlt");
