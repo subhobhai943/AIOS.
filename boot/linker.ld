@@ -1,6 +1,12 @@
 /* ============================================================
  * AIOS Linker Script
- * Places kernel at 1MB physical / 3GB virtual (higher-half)
+ * x86-64, kernel loaded at 1 MiB physical.
+ *
+ * Exported symbols used by C code:
+ *   _kernel_start  — first byte of the kernel image
+ *   _kernel_end    — first byte after the kernel image
+ *                     (heap is placed here, page-aligned)
+ *   stack_bottom / stack_top — initial 16 KiB stack bounds
  * ============================================================ */
 
 OUTPUT_FORMAT(elf64-x86-64)
@@ -12,9 +18,11 @@ SECTIONS
     /* Load address: 1 MiB */
     . = 1M;
 
+    _kernel_start = .;          /* first byte of the kernel image */
+
     .text ALIGN(4K) :
     {
-        *(.multiboot2)      /* Multiboot2 header MUST be first */
+        *(.multiboot2)          /* Multiboot2 header MUST be first */
         *(.text)
     }
 
@@ -39,5 +47,6 @@ SECTIONS
         stack_top = .;
     }
 
-    kernel_end = .;
+    . = ALIGN(4K);
+    _kernel_end = .;            /* first byte after the kernel image */
 }
