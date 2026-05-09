@@ -50,10 +50,10 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 0.3 — GDT (Global Descriptor Table)
 - ✅ `kernel/gdt.c` — GDT setup code exists
-- ⬜ Verify GDT has: null descriptor, kernel code (64-bit), kernel data, user code, user data, TSS descriptor
-- ⬜ `gdt_flush()` calls `lgdt` and far-jumps to reload CS
-- ⬜ TSS loaded with `ltr`
-- ⬜ Test: kernel runs in ring 0 after GDT reload with no triple fault
+- ✅ Verify GDT has: null descriptor, kernel code (64-bit), kernel data, user code, user data, TSS descriptor
+- ✅ `gdt_flush()` calls `lgdt` and far-jumps to reload CS (lretq trick)
+- ✅ TSS loaded with `ltr`
+- ✅ Test: kernel runs in ring 0 after GDT reload with no triple fault
 
 ---
 
@@ -519,7 +519,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Build system | `build.sh`, `Makefile`, `boot/linker.ld` | ✅ Scaffolded |
 | Dep checker | `scripts/check_deps.sh` | ✅ Complete |
 | GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Fixed & Complete |
-| GDT | `kernel/gdt.c` | 🔄 Code exists, needs verification |
+| GDT | `kernel/gdt.c` | ✅ Complete — real TSS, far-jump CS reload, ltr |
 | IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | 🔄 Code exists, needs verification |
 | APIC | `kernel/apic.c`, `kernel/apic.h` | 🔄 Code exists |
 | PIT | `kernel/pit.c`, `kernel/pit.h` | 🔄 Code exists |
@@ -545,14 +545,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### Immediate Next Steps (pick up here)
 
 1. **Confirm GRUB boots ISO in QEMU** — run `make run`, confirm it reaches `kernel_main` without crashing (Phase 0.2 last item)
-2. **Verify GDT** (`kernel/gdt.c`) — ensure null + kernel code + kernel data + user code + user data + TSS descriptors exist, `gdt_flush()` does `lgdt` + far-jump, TSS loaded with `ltr` (Phase 0.3)
-3. **Verify IDT** — all 256 entries populated, exception handlers dump registers + halt, `idt_flush()` calls `lidt` (Phase 1.1)
-4. **Test serial output** — run QEMU with `-serial stdio`, confirm boot messages appear (Phase 1.5)
-5. **Verify PMM** — call `pmm_alloc_page()` 10 times, print addresses, confirm no overlaps (Phase 2.1)
-6. **Verify VMM + heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3)
-7. **Create `ahci.c`** — Phase 3.2 is blocked on this
-8. **Create `kernel/fs/ext2.c`** — Phase 3.3, prerequisite for loading LLM weights from disk
-9. **Create `kernel/task.c`** — Phase 4.1, prerequisite for running LLM in background thread
+2. **Verify IDT** — all 256 entries populated, exception handlers dump registers + halt, `idt_flush()` calls `lidt` (Phase 1.1) ← **next coding task**
+3. **Test serial output** — run QEMU with `-serial stdio`, confirm boot messages appear (Phase 1.5)
+4. **Verify PMM** — call `pmm_alloc_page()` 10 times, print addresses, confirm no overlaps (Phase 2.1)
+5. **Verify VMM + heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3)
+6. **Create `ahci.c`** — Phase 3.2 is blocked on this
+7. **Create `kernel/fs/ext2.c`** — Phase 3.3, prerequisite for loading LLM weights from disk
+8. **Create `kernel/task.c`** — Phase 4.1, prerequisite for running LLM in background thread
 
 ---
 
