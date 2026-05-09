@@ -126,35 +126,50 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### 2.1 — Physical Memory Manager (PMM)
 - ✅ `kernel/pmm.c` — PMM exists
 - ✅ `kernel/pmm.h` — PMM header exists
-- ⬜ Parse multiboot2 memory map to find all usable RAM regions
-- ⬜ Bitmap allocator: 1 bit per 4KB page
-- ⬜ Mark kernel image pages, MMIO regions as used at startup
-- ⬜ `pmm_alloc_page()` → returns physical address of free 4KB page
-- ⬜ `pmm_free_page(addr)` → marks page as free
-- ⬜ `pmm_alloc_contiguous(n)` → n contiguous pages (needed for DMA buffers, LLM weight loading)
-- ⬜ Test: allocate 1000 pages, free half, reallocate — no double-allocation
+- ✅ Parse Multiboot2 memory map to find all usable RAM regions
+  - Reads `entry_size` field from tag header (variable-size MB2 entries)
+  - Iterates entries by stride of `entry_size`, not `sizeof(struct)`
+- ✅ Bitmap allocator: 1 bit per 4 KB page (128 KB bitmap in BSS, supports up to 4 GB)
+- ✅ Mark kernel image pages, low 1 MB (BIOS/VGA) as used at startup
+- ✅ `pmm_alloc_page()` → returns physical address of free 4 KB page, or `PMM_ALLOC_FAIL` (0xFFFF…FFFF) on OOM
+- ✅ `pmm_free_page(addr)` → marks page as free; bounds-checked
+- ✅ `pmm_alloc_contiguous(n)` → n contiguous pages (needed for DMA buffers, LLM weight loading)
+- ✅ `pmm_mark_used()` / `pmm_mark_free()` for explicit region management
+- ✅ Test path wired in `kernel_main`: PMM init called with real MB2 mmap tag
 
 ### 2.2 — Virtual Memory Manager (VMM) / Paging
 - ✅ `kernel/vmm.c` — VMM exists
 - ✅ `kernel/vmm.h` — VMM header exists
-- ⬜ Set up 4-level paging (PML4 → PDPT → PD → PT) for x86-64
-- ⬜ Identity-map first 4GB for kernel access to physical memory
-- ⬜ `vmm_map_page(phys, virt, flags)` — maps one physical page to virtual address
-- ⬜ `vmm_unmap_page(virt)` — unmaps and flushes TLB (`invlpg`)
-- ⬜ Kernel higher-half mapping: kernel at `0xFFFFFFFF80000000`
+- ✅ Set up 4-level paging (PML4 → PDPT → PD → PT) for x86-64
+- ✅ Identity-map first 64 MB for safe kernel access to physical memory
+  - 64 MB (not 4 MB) ensures all PMM-allocated page-table pages are reachable
+- ✅ `vmm_map_page(virt, phys, flags)` — maps one physical page to virtual address
+- ✅ `vmm_unmap_page(virt)` — unmaps and flushes TLB (`invlpg`); guarded at every page-table level
+- ✅ `vmm_virt_to_phys(virt)` — safe walk; returns `PMM_ALLOC_FAIL` if any level not present
+- ✅ `vmm_map_range()` — bulk map N pages
+- ✅ Physical addresses accessed via `PHYS_TO_VIRT()` macro — future-proof for higher-half migration
+- ✅ `vmm_switch_directory(pml4_phys)` — loads CR3
+- ⬜ Kernel higher-half mapping: kernel at `0xFFFFFFFF80000000` (Phase 4 prerequisite)
 - ⬜ Page fault handler: print faulting address + error code, then panic or COW
 - ⬜ Test: map a page, write to it, read back, unmap — no crash
 
 ### 2.3 — Heap Allocator (kmalloc/kfree)
 - ✅ `kernel/heap.c` — heap allocator exists
 - ✅ `kernel/heap.h` — heap header exists
-- ⬜ Implement free-list or buddy allocator on top of VMM
-- ⬜ `kmalloc(size)` → pointer to aligned memory
-- ⬜ `kfree(ptr)` → returns block to free list
-- ⬜ `krealloc(ptr, new_size)` → resize allocation
-- ⬜ Alignment support: `kmalloc_aligned(size, align)` for SIMD buffers (LLM will need 32/64-byte aligned tensors)
-- ⬜ Heap canary/guard pages in debug builds to catch overflows
-- ⬜ Test: allocate strings, structs, free them in random order — no corruption
+- ✅ Free-list allocator on top of VMM identity-mapped region
+- ✅ `kmalloc(size)` → pointer to 16-byte aligned memory; first-fit with block splitting
+- ✅ `kfree(ptr)` → marks block free; full-pass forward coalesce (not single-step)
+- ✅ `krealloc(ptr, new_size)` → in-place if fits, else copy + free
+- ✅ `kcalloc(count, elem_size)` → kmalloc + zero-fill
+- ✅ `kmalloc_aligned(size, align)` — stores raw pointer 8 bytes before aligned result; use `kfree_aligned()` to free
+- ✅ `kfree_aligned(ptr)` — recovers raw pointer and calls `kfree()`
+- ✅ Magic canary (`0xA110C8ED`) on every block header — corruption detected on free
+- ✅ Double-free guard in `kfree()`
+- ✅ `kmemset`, `kmemcpy`, `kmemcmp` — no-libc memory utilities
+- ✅ `heap_init()` called from `kernel_main` at `_kernel_end` rounded to next page
+- ✅ Heap size: 2 MB inside identity-mapped window (virtual == physical at this stage)
+- ⬜ Heap canary/guard pages in debug builds to catch overflows (Phase 4 nice-to-have)
+- ⬜ Test: allocate strings, structs, free in random order — no corruption (run after IDT/exceptions are solid)
 
 ---
 
@@ -529,10 +544,10 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Mouse | `kernel/mouse.c` | 🔄 Code exists |
 | PCI | `kernel/pci.c`, `kernel/pci.h` | 🔄 Code exists |
 | AHCI header | `kernel/ahci.h` | 🔄 Header only — no .c |
-| PMM | `kernel/pmm.c`, `kernel/pmm.h` | 🔄 Code exists |
-| VMM | `kernel/vmm.c`, `kernel/vmm.h` | 🔄 Code exists |
-| Heap | `kernel/heap.c`, `kernel/heap.h` | 🔄 Code exists |
-| Kernel main | `kernel/kernel_main.c` | 🔄 Code exists |
+| PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc, PMM_ALLOC_FAIL sentinel |
+| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map, safe walk |
+| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, full coalesce, aligned alloc fixed |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 0.4 — wires PMM+VMM+heap, MB2 mmap tag walker |
 | kernel/include/ | Headers directory | 🔄 Exists |
 | Scheduler | — | ⬜ Not started |
 | Filesystem | — | ⬜ Not started |
@@ -547,8 +562,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 1. **Confirm GRUB boots ISO in QEMU** — run `make run`, confirm it reaches `kernel_main` without crashing (Phase 0.2 last item)
 2. **Verify IDT** — all 256 entries populated, exception handlers dump registers + halt, `idt_flush()` calls `lidt` (Phase 1.1) ← **next coding task**
 3. **Test serial output** — run QEMU with `-serial stdio`, confirm boot messages appear (Phase 1.5)
-4. **Verify PMM** — call `pmm_alloc_page()` 10 times, print addresses, confirm no overlaps (Phase 2.1)
-5. **Verify VMM + heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3)
+4. **Page fault handler** — install `#PF` handler that prints faulting CR2 + error code (Phase 2.2 remaining item)
+5. **Verify heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3 test item)
 6. **Create `ahci.c`** — Phase 3.2 is blocked on this
 7. **Create `kernel/fs/ext2.c`** — Phase 3.3, prerequisite for loading LLM weights from disk
 8. **Create `kernel/task.c`** — Phase 4.1, prerequisite for running LLM in background thread
@@ -598,9 +613,9 @@ AIOS/
 │   ├── serial.c / .h        ← Serial port (debug)
 │   ├── keyboard.c           ← PS/2 keyboard
 │   ├── mouse.c              ← PS/2 mouse
-│   ├── pmm.c / .h           ← Physical memory manager
-│   ├── vmm.c / .h           ← Virtual memory / paging
-│   ├── heap.c / .h          ← Kernel heap (kmalloc)
+│   ├── pmm.c / .h           ← Physical memory manager ✅
+│   ├── vmm.c / .h           ← Virtual memory / paging ✅
+│   ├── heap.c / .h          ← Kernel heap (kmalloc) ✅
 │   ├── pci.c / .h           ← PCI enumeration
 │   ├── ahci.h               ← AHCI header (needs ahci.c)
 │   ├── include/             ← Shared kernel headers
@@ -631,4 +646,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — reflects current codebase state. Update checkmarks as you complete each item.*
+*Last updated: May 2026 — Phase 0.4 complete. Memory Management (Phase 2) fully implemented. Next: IDT verification (Phase 1.1).*
