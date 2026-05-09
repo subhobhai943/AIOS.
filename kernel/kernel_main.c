@@ -1,7 +1,7 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 1.1 : IDT — exception dump, idt_flush(), #DE test
- * (Phase 0.4 memory management still intact)
+ * Phase 1.2 : APIC — legacy PIC disabled, Local APIC + IOAPIC
+ * (Phases 0.x and 1.1 fully intact)
  * ============================================================ */
 
 #include "include/vga.h"
@@ -12,6 +12,7 @@
 #include "include/heap.h"
 #include "include/keyboard.h"
 #include "include/mouse.h"
+#include "apic.h"
 
 #include <stdint.h>
 
@@ -29,26 +30,9 @@ extern uint8_t _kernel_start;
 extern uint8_t _kernel_end;
 
 /* ---------------------------------------------------------------
- * Heap location and size
+ * Heap size
  * --------------------------------------------------------------- */
 #define HEAP_SIZE   (2u * 1024u * 1024u)
-
-/* ---------------------------------------------------------------
- * PIC I/O helpers
- * --------------------------------------------------------------- */
-#define PIC1_DATA 0x21u
-#define PIC2_DATA 0xA1u
-
-static inline void outb(uint16_t port, uint8_t val)
-{
-    __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
-}
-static inline uint8_t inb(uint16_t port)
-{
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
 
 /* ---------------------------------------------------------------
  * Helpers
@@ -79,31 +63,18 @@ static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
     while (off < total) {
         uint32_t type = *(uint32_t *)(uintptr_t)(mb2_addr + off);
         uint32_t size = *(uint32_t *)(uintptr_t)(mb2_addr + off + 4);
-
         if (type == MB2_TAG_TYPE_END) break;
-
         if (type == MB2_TAG_TYPE_MMAP) {
             if (tag_size_out) *tag_size_out = size;
             return (uint64_t)(mb2_addr + off);
         }
-
         off += (size + 7u) & ~7u;
     }
     return 0;
 }
 
 /* ---------------------------------------------------------------
- * #DE TEST — custom handler for vector 0 (divide-by-zero)
- *
- * The CPU delivers #DE when DIV/IDIV divide by zero.  This handler
- * prints a success banner and then RETURNS so the kernel continues
- * booting — the handler adjusts RIP past the faulting instruction
- * by adding 2 (the size of `div rcx` / `idiv` variants varies, but
- * we just skip by setting RIP = RIP+2; since this is a controlled
- * test inside kernel_main that is safe enough).
- *
- * In a real scenario you'd panic; here the point is to confirm the
- * IDT fires without a triple-fault.
+ * #DE test handler (Phase 1.1 — kept for regression)
  * --------------------------------------------------------------- */
 static void de_test_handler(interrupt_frame_t *frame)
 {
@@ -115,18 +86,30 @@ static void de_test_handler(interrupt_frame_t *frame)
     vga_puts_color("  RIP=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     vga_puthex(frame->rip);
     vga_putchar('\n');
-
-    /* Advance RIP past the faulting `div` instruction.
-     * `div rcx` encodes as 48 F7 F1 (3 bytes in 64-bit mode).
-     * We rely on the test below using exactly that form. */
-    frame->rip += 3;
+    frame->rip += 3;   /* skip 3-byte `div rcx` (48 F7 F1) */
 }
 
 /* ---------------------------------------------------------------
- * ISR callbacks
+ * IRQ handlers
+ *
+ * IMPORTANT: every handler delivered by the APIC must call
+ * apic_send_eoi() at the end.  Before Phase 1.2 we were sending
+ * a PIC EOI (outb 0x20); now the APIC is live so we write to
+ * LAPIC EOI register instead.
  * --------------------------------------------------------------- */
-static void kbd_isr  (interrupt_frame_t *f) { (void)f; keyboard_handle_irq(); }
-static void mouse_isr(interrupt_frame_t *f) { (void)f; mouse_handle_irq(); }
+static void kbd_isr(interrupt_frame_t *f)
+{
+    (void)f;
+    keyboard_handle_irq();
+    apic_send_eoi();   /* LAPIC EOI — replaces legacy `outb 0x20` */
+}
+
+static void mouse_isr(interrupt_frame_t *f)
+{
+    (void)f;
+    mouse_handle_irq();
+    apic_send_eoi();
+}
 
 /* ---------------------------------------------------------------
  * kernel_main
@@ -142,7 +125,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 1.1 : IDT + Exception Handling\n",
+        "  Phase 1.2 : Local APIC + I/O APIC\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
@@ -152,8 +135,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
     if (magic == MULTIBOOT2_MAGIC) {
         print_ok("Multiboot2 magic OK");
     } else {
-        vga_puts_color("[WARN] Not booted via Multiboot2 — "
-                       "memory map unavailable\n",
+        vga_puts_color("[WARN] Not booted via Multiboot2\n",
                        VGA_COLOR_BROWN, VGA_COLOR_BLACK);
     }
 
@@ -165,36 +147,18 @@ void kernel_main(uint32_t magic, uint32_t addr)
     idt_init();
     print_ok("IDT: 256 gates, PIC remapped, exception dump active");
 
-    /* ---- #DE Test -------------------------------------------- */
-    /*
-     * Register a temporary handler for vector 0 (#DE) that
-     * acknowledges the exception and advances RIP so we continue.
-     * After the test we restore the default (NULL = panic dump).
-     */
+    /* ---- #DE regression test --------------------------------- */
     idt_register_handler(0, de_test_handler);
-
     vga_puts_color(
-        "  [TEST] Triggering divide-by-zero (#DE)...\n",
+        "  [TEST] Triggering #DE (divide-by-zero)...\n",
         VGA_COLOR_BROWN, VGA_COLOR_BLACK
     );
-
-    /*
-     * Inline assembly: set RCX=0, then execute `div rcx` (REX.W
-     * DIV r/m64 = 48 F7 F1).  This raises #DE immediately.
-     * The de_test_handler advances RIP by 3 so execution resumes
-     * at the instruction after `div rcx`.
-     */
     __asm__ volatile (
         "xor %%rcx, %%rcx  \n"
-        "div %%rcx         \n"   /* 48 F7 F1 — raises #DE */
-        :
-        :
-        : "rax", "rdx", "rcx"
+        "div %%rcx         \n"
+        ::: "rax", "rdx", "rcx"
     );
-
-    print_ok("#DE test PASSED — IDT catches exception, returns to caller");
-
-    /* Remove the test handler; from here on #DE → panic dump */
+    print_ok("#DE test PASSED");
     idt_register_handler(0, 0);
 
     /* ---- PMM ------------------------------------------------- */
@@ -202,7 +166,6 @@ void kernel_main(uint32_t magic, uint32_t addr)
         uint32_t mmap_size = 0;
         uint64_t mmap_tag  = find_mmap_tag(addr, &mmap_size);
         if (!mmap_tag) print_fail("MB2 mmap tag not found");
-
         uint64_t kstart = (uint64_t)(uintptr_t)&_kernel_start;
         uint64_t kend   = (uint64_t)(uintptr_t)&_kernel_end;
         pmm_init(mmap_tag, mmap_size, kstart, kend);
@@ -222,32 +185,45 @@ void kernel_main(uint32_t magic, uint32_t addr)
     heap_init(kend_aligned, HEAP_SIZE);
     print_ok("Heap: 2 MB kernel heap ready");
 
-    /* ---- Keyboard -------------------------------------------- */
+    /* ---- APIC ----------------------------------------------- */
+    /*
+     * apic_init() does three things in order:
+     *   1. Remap 8259 PIC to 0xA0-0xAF and mask all IRQ lines.
+     *      The legacy PIC is now neutered — it cannot interfere.
+     *   2. Enable the Local APIC via IA32_APIC_BASE MSR.
+     *      Spurious vector = 0xFF, TPR = 0 (accept all).
+     *   3. Program the I/O APIC to route IRQ0 (PIT timer) →
+     *      vector 0x20 (32) on BSP (LAPIC ID 0).
+     *
+     * After this call, all hardware IRQs must EOI via
+     * apic_send_eoi() — NOT the legacy PIC EOI sequence.
+     */
+    apic_init();
+    print_ok("APIC: legacy PIC dead, LAPIC+IOAPIC active");
+
+    /* ---- Register IRQ handlers (APIC delivery) --------------- */
+    /*
+     * With the APIC active, keyboard is on IOAPIC IRQ1 → vec 33
+     * and mouse is on IOAPIC IRQ12 → vec 44.  Route those lines.
+     * (IRQ0 → vec 32 was already routed inside apic_init for PIT.)
+     */
+    ioapic_route(1,  0x21, 0);   /* IRQ1  keyboard → IDT[33]  */
+    ioapic_route(12, 0x2C, 0);   /* IRQ12 mouse    → IDT[44]  */
+
     idt_register_handler(0x21, kbd_isr);
     keyboard_init();
-    print_ok("Keyboard driver ready");
+    print_ok("Keyboard driver ready (APIC IRQ1 → vec 0x21)");
 
-    /* ---- Mouse ----------------------------------------------- */
     idt_register_handler(0x2C, mouse_isr);
     mouse_init();
-    print_ok("Mouse driver ready");
-
-    /* ---- Unmask PIC IRQs ------------------------------------- */
-    uint8_t m1 = inb(PIC1_DATA);
-    uint8_t m2 = inb(PIC2_DATA);
-    m1 &= ~(1u << 1);   /* IRQ1  keyboard */
-    m1 &= ~(1u << 2);   /* IRQ2  cascade  */
-    m2 &= ~(1u << 4);   /* IRQ12 mouse    */
-    outb(PIC1_DATA, m1);
-    outb(PIC2_DATA, m2);
-    print_ok("PIC IRQ1/IRQ2/IRQ12 unmasked");
+    print_ok("Mouse driver ready (APIC IRQ12 → vec 0x2C)");
 
     /* ---- Enable interrupts ----------------------------------- */
     __asm__ volatile ("sti");
     print_ok("Interrupts enabled (STI)");
 
     vga_putchar('\n');
-    vga_puts_color("Keyboard + Mouse active. Type something...\n",
+    vga_puts_color("APIC active. Keyboard + Mouse live. Type something...\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
 
     for (;;) __asm__ volatile ("hlt");
