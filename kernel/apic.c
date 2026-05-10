@@ -1,22 +1,23 @@
 /* ============================================================
- * AIOS — APIC Driver
- * Phase 1.2 — Legacy PIC remap + disable, Local APIC init,
- *              I/O APIC IRQ0→vector 32 routing, apic_send_eoi()
+ * AIOS - APIC Driver
+ * Phase 1.2 - Legacy PIC remap + disable, Local APIC init,
+ *             I/O APIC IRQ0->vector 32 routing, apic_send_eoi()
  *
- * FIX (May 2026) — #PF on first LAPIC register write
+ * FIX (May 2026) - #PF on first LAPIC register write
  * -----------------------------------------------------------
  * LAPIC MMIO is at 0xFEE00000 and IOAPIC at 0xFEC00000.
  * Both are at the top of the 32-bit address space (~4 GB).
  * The kernel VMM identity-maps only the first 64 MB at boot
- * (0x000000 – 0x3FFFFFF), so any access to these addresses
+ * (0x000000 - 0x3FFFFFF), so any access to these addresses
  * fired a Page Fault (#PF, vector 0xE, error 0x2 = write to
  * non-present page) before a single APIC register was touched.
  *
  * Fix: call vmm_map_mmio() for BOTH regions at the very top
  * of apic_init(), before pic_remap_and_disable() or any
- * lapic_*/ioapic_* helper is called.
+ * lapic_read/lapic_write/ioapic_read_reg/ioapic_write_reg
+ * helper is called.
  *
- * PAGE_NOCACHE is mandatory for MMIO — it sets PCD (bit 4)
+ * PAGE_NOCACHE is mandatory for MMIO - it sets PCD (bit 4)
  * which prevents the CPU from caching device register reads
  * or coalescing device register writes.
  * ============================================================ */
@@ -49,7 +50,7 @@ static inline void io_wait(void)
 }
 
 /* ============================================================
- * MMIO helpers — Local APIC
+ * MMIO helpers - Local APIC
  * ============================================================ */
 
 static inline uint32_t lapic_read(uint32_t off)
@@ -63,7 +64,7 @@ static inline void lapic_write(uint32_t off, uint32_t val)
 }
 
 /* ============================================================
- * MMIO helpers — I/O APIC
+ * MMIO helpers - I/O APIC
  * ============================================================ */
 
 static inline void ioapic_write_reg(uint8_t reg, uint32_t val)
@@ -105,7 +106,7 @@ static inline void wrmsr(uint32_t msr, uint64_t val)
 }
 
 /* ============================================================
- * Step 1 — Remap legacy 8259 PIC then mask all IRQs
+ * Step 1 - Remap legacy 8259 PIC then mask all IRQs
  * ============================================================ */
 
 static void pic_remap_and_disable(void)
@@ -125,7 +126,7 @@ static void pic_remap_and_disable(void)
 }
 
 /* ============================================================
- * Step 2 — Enable the Local APIC via IA32_APIC_BASE MSR
+ * Step 2 - Enable the Local APIC via IA32_APIC_BASE MSR
  * ============================================================ */
 
 static void lapic_enable(void)
@@ -143,7 +144,7 @@ static void lapic_enable(void)
 }
 
 /* ============================================================
- * Step 3 — Route IRQ0 (PIT timer) via the I/O APIC
+ * Step 3 - Route IRQ0 (PIT timer) via the I/O APIC
  * ============================================================ */
 
 static void ioapic_route_irq0(void)
@@ -160,7 +161,7 @@ static void ioapic_route_irq0(void)
 }
 
 /* ============================================================
- * apic_init — full Phase 1.2 initialisation
+ * apic_init - full Phase 1.2 initialisation
  *
  * FIRST ACTION: map the LAPIC and IOAPIC MMIO pages.
  * Nothing that touches a device register may run before this.
@@ -171,16 +172,16 @@ void apic_init(void)
     /* ----------------------------------------------------------
      * 0. Map LAPIC and IOAPIC MMIO regions into the page tables.
      *
-     * LAPIC:  0xFEE00000 – 0xFEE00FFF  (1 page, 4 KB)
-     * IOAPIC: 0xFEC00000 – 0xFEC00FFF  (1 page, 4 KB)
+     * LAPIC:  0xFEE00000 - 0xFEE00FFF  (1 page, 4 KB)
+     * IOAPIC: 0xFEC00000 - 0xFEC00FFF  (1 page, 4 KB)
      *
      * vmm_map_mmio() uses PAGE_PRESENT | PAGE_WRITE | PAGE_NOCACHE
      * (PCD bit set) which is the correct attribute for all MMIO.
      *
      * These calls must come before ANY lapic_read/write or
-     * ioapic_read_reg/ioapic_write_reg — including the PIC
-     * remap below (which is port I/O, so safe) and CERTAINLY
+     * ioapic_read_reg/ioapic_write_reg - including CERTAINLY
      * before lapic_enable() or ioapic_route_irq0().
+     * The PIC remap below uses port I/O so it is always safe.
      * ---------------------------------------------------------- */
     vmm_map_mmio(LAPIC_BASE,  1);   /* Local APIC  @ 0xFEE00000 */
     vmm_map_mmio(IOAPIC_BASE, 1);   /* I/O APIC    @ 0xFEC00000 */
@@ -208,10 +209,10 @@ void apic_init(void)
     vga_putdec(apic_get_id());
     vga_putchar('\n');
 
-    /* 3. Route IRQ0 (PIT timer) → vector 0x20 on BSP. */
+    /* 3. Route IRQ0 (PIT timer) -> vector 0x20 on BSP. */
     ioapic_route_irq0();
     vga_puts_color(
-        "  [ OK ] I/O APIC: IRQ0 (PIT) → vector 0x20 on BSP\n",
+        "  [ OK ] I/O APIC: IRQ0 (PIT) -> vector 0x20 on BSP\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK
     );
 
@@ -265,7 +266,7 @@ void apic_timer_init(uint32_t initial_count)
 }
 
 /* ============================================================
- * ioapic_route — generic (any IRQ, any vector, any destination)
+ * ioapic_route - generic (any IRQ, any vector, any destination)
  * ============================================================ */
 
 void ioapic_route(uint8_t irq, uint8_t vector, uint8_t dest_apic_id)
