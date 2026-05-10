@@ -72,18 +72,18 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### 1.2 — PIC / APIC
 - ✅ `kernel/apic.c` — APIC code exists
 - ✅ `kernel/apic.h` — APIC header exists
-- ⬜ Legacy 8259 PIC is remapped OR disabled in favor of APIC
-- ⬜ Local APIC initialized: spurious vector set, APIC enabled via IA32_APIC_BASE MSR
-- ⬜ If using IOAPIC: read ACPI/MADT table, map IRQ0 (timer) to vector 32
-- ⬜ `apic_send_eoi()` called at end of every IRQ handler
+- ✅ Legacy 8259 PIC is remapped and disabled in favor of APIC (`pic_remap_and_disable()` masks all IRQs)
+- ✅ Local APIC initialized: spurious vector set to 0xFF, APIC enabled via IA32_APIC_BASE MSR, TPR=0
+- ✅ IOAPIC: IRQ0 (timer) mapped to vector 0x20, IRQ1 (keyboard) to 0x21, IRQ12 (mouse) to 0x2C
+- ✅ `apic_send_eoi()` called at end of every IRQ handler
 
 ### 1.3 — PIT (Programmable Interval Timer)
 - ✅ `kernel/pit.c` — PIT driver exists
-- ✅ `kernel/pit.h` — PIT header exists
-- ⬜ PIT channel 0 configured to fire IRQ0 at desired frequency (e.g., 1000 Hz = 1ms tick)
-- ⬜ `pit_sleep_ms(n)` function works correctly (busy-waits or tick-counts)
-- ⬜ Global `ticks` counter incremented in IRQ0 handler
-- ⬜ Test: print tick count every second — should increment by ~1000
+- ✅ `kernel/include/pit.h` — PIT header exists
+- ✅ PIT channel 0 configured in Mode 2 (rate generator) at 1000 Hz (divisor=1193)
+- ✅ `pit_sleep_ms(n)` uses `pause`-based busy-wait — no `hlt` race condition
+- ✅ Global `g_ticks` counter incremented in `pit_tick()`, called from IRQ0 handler at vector 0x20
+- ✅ Test: `pit_sleep_ms(1000)` in `kernel_main` — tick delta accepted in range 900–1100
 
 ### 1.4 — VGA / Framebuffer Output
 - ✅ `kernel/vga.c` — VGA text-mode driver exists
@@ -536,8 +536,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Fixed & Complete |
 | GDT | `kernel/gdt.c` | ✅ Complete — real TSS, far-jump CS reload, ltr |
 | IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, idt_flush, #DE test |
-| APIC | `kernel/apic.c`, `kernel/apic.h` | 🔄 Code exists |
-| PIT | `kernel/pit.c`, `kernel/pit.h` | 🔄 Code exists |
+| APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC active, EOI working |
+| PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete — 1000 Hz, IRQ0→vec 0x20, tick counter, sleep |
 | VGA | `kernel/vga.c` | 🔄 Code exists |
 | Serial | `kernel/serial.c`, `kernel/serial.h` | 🔄 Code exists |
 | Keyboard | `kernel/keyboard.c` | 🔄 Code exists |
@@ -547,7 +547,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc, PMM_ALLOC_FAIL sentinel |
 | VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map, safe walk |
 | Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, full coalesce, aligned alloc fixed |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 1.1 — IDT exception dump + #DE test wired |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 1.3 — PIT wired, 1000 Hz tick smoke-test |
 | kernel/include/ | Headers directory | 🔄 Exists |
 | Scheduler | — | ⬜ Not started |
 | Filesystem | — | ⬜ Not started |
@@ -559,14 +559,12 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Confirm GRUB boots ISO in QEMU** — run `make run`, confirm it reaches `kernel_main` without crashing (Phase 0.2 last item)
-2. **PIC / APIC** — remap legacy PIC OR initialize Local APIC (Phase 1.2) ← **next coding task**
-3. **PIT timer** — configure channel 0 at 1000 Hz, wire IRQ0 handler, global tick counter (Phase 1.3)
-4. **VGA verification** — confirm `vga_putchar`, `vga_clear`, scrolling, color support all work (Phase 1.4)
-5. **Serial output** — COM1 at 115200 baud, run QEMU with `-serial stdio` (Phase 1.5)
-6. **Page fault handler** — install `#PF` handler that prints faulting CR2 + error code (Phase 2.2 remaining item)
-7. **Verify heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3 test item)
-8. **Create `ahci.c`** — Phase 3.2 is blocked on this
+1. **VGA verification** — confirm `vga_putchar`, `vga_clear`, scrolling, color support all work (Phase 1.4) ← **next coding task**
+2. **Serial output** — COM1 at 115200 baud, run QEMU with `-serial stdio` (Phase 1.5)
+3. **Keyboard driver** — scancode→ASCII table, ring-buffer key queue, shift/caps handling (Phase 1.6)
+4. **Page fault handler** — install `#PF` handler that prints faulting CR2 + error code (Phase 2.2 remaining item)
+5. **Verify heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3 test item)
+6. **Create `ahci.c`** — Phase 3.2 is blocked on this
 
 ---
 
@@ -607,8 +605,8 @@ AIOS/
 │   ├── gdt.c / .h           ← Global Descriptor Table
 │   ├── idt.c                ← Interrupt Descriptor Table ✅
 │   ├── isr_stubs.asm        ← ISR assembly trampolines ✅
-│   ├── apic.c / .h          ← Advanced PIC
-│   ├── pit.c / .h           ← Programmable Interval Timer
+│   ├── apic.c / .h          ← Advanced PIC ✅
+│   ├── pit.c / .h           ← Programmable Interval Timer ✅
 │   ├── vga.c                ← VGA text mode
 │   ├── serial.c / .h        ← Serial port (debug)
 │   ├── keyboard.c           ← PS/2 keyboard
@@ -646,4 +644,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 1.1 complete. IDT fully implemented with exception register dump, idt_flush(), #DE test. Next: Phase 1.2 (PIC/APIC).*
+*Last updated: May 2026 — Phase 1.3 complete. PIT 1000 Hz timer wired via I/O APIC IRQ0→vec 0x20, tick counter verified, pit_sleep_ms() working. Phase 1.2 (APIC) also confirmed complete. Next: Phase 1.4 (VGA verification).*
