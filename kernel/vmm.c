@@ -10,24 +10,24 @@
  *    as virtual pointers before a higher-half mapping is set up.
  *
  * 2. PHYS_TO_VIRT / VIRT_TO_PHYS macros.
- *    Once paging is live, every pointer dereference of a page-
- *    table physical address goes through PHYS_TO_VIRT().
- *    In the early identity-mapped phase phys == virt, so the
- *    macro is a no-op — but the call sites are future-proof for
- *    when we move to a proper higher-half kernel map.
+ *    In the early identity-mapped phase phys == virt, so these
+ *    are no-ops — but call sites are future-proof.
  *
  * 3. Safe guard on all walk helpers.
  *    vmm_virt_to_phys() and vmm_unmap_page() check PAGE_PRESENT
- *    at every level so they never dereference a zero/garbage PTE.
+ *    at every level.
  *
- * 4. STATIC BUMP FALLBACK (added May 2026).
- *    vmm_init() is called BEFORE pmm_init() when Multiboot2 is
- *    not available (no mmap tag).  In that case pmm_alloc_page()
- *    returns PMM_ALLOC_FAIL immediately because total_frames==0.
- *    We now provide a small static arena of pre-zeroed 4 KB pages
- *    (STATIC_PT_PAGES × 4 KB = enough for PML4 + the ~130 page-
- *    table pages needed to cover 64 MB).  The static arena is
- *    used ONLY when the PMM has no free pages to give.
+ * 4. STATIC BUMP FALLBACK.
+ *    vmm_init() may be called before pmm_init() (no MB2 mmap).
+ *    A 640 KB BSS pool covers the ~19 PT pages needed for the
+ *    64 MB identity map with large headroom.
+ *
+ * 5. vmm_map_mmio().
+ *    Maps MMIO regions (LAPIC 0xFEE00000, IOAPIC 0xFEC00000,
+ *    PCI BARs …) with PAGE_NOCACHE before any device access.
+ *    The identity map only covers 0–64 MB; MMIO is at 4 GB-range
+ *    addresses and MUST be explicitly mapped or a #PF fires
+ *    on the very first register read/write.
  * ============================================================ */
 
 #include <stdint.h>
@@ -36,15 +36,9 @@
 #include "include/pmm.h"
 #include "include/vga.h"
 
-/* ---------------------------------------------------------------
- * In the early boot identity-mapped region phys == virt.
- * --------------------------------------------------------------- */
 #define PHYS_TO_VIRT(p)  ((void *)(uintptr_t)(p))
 #define VIRT_TO_PHYS(v)  ((uint64_t)(uintptr_t)(v))
 
-/* ---------------------------------------------------------------
- * Page-index extractors
- * --------------------------------------------------------------- */
 #define PML4_IDX(v)  (((uint64_t)(v) >> 39) & 0x1FFu)
 #define PDPT_IDX(v)  (((uint64_t)(v) >> 30) & 0x1FFu)
 #define PD_IDX(v)    (((uint64_t)(v) >> 21) & 0x1FFu)
@@ -54,15 +48,9 @@
 #define PHYS_ADDR_MASK     (~0xFFFULL)
 
 /* ---------------------------------------------------------------
- * Static page-table page pool
- *
- * Identity-mapping 64 MB requires:
- *   1 PML4 + 1 PDPT + 1 PD + 16 PT pages  = 19 pages minimum.
- *   We allocate 160 pages (640 KB) to give comfortable headroom
- *   (allows up to ~320 MB identity mapping plus overhead).
- *
- * This pool lives in BSS (zeroed by the bootloader), so each
- * page is already clean — no explicit zeroing needed.
+ * Static page-table page pool (640 KB, BSS = zeroed at boot)
+ * 160 pages → covers 64 MB identity map (19 pages) + large headroom
+ * for MMIO mappings added later (LAPIC, IOAPIC, …).
  * Used ONLY when pmm_alloc_page() returns PMM_ALLOC_FAIL.
  * --------------------------------------------------------------- */
 #define STATIC_PT_PAGES  160u
@@ -80,11 +68,10 @@ static page_entry_t *alloc_from_static_pool(void)
         );
         for (;;) __asm__ volatile ("hlt");
     }
-    /* BSS is zero-initialised, so no memset needed */
     page_entry_t *p =
         (page_entry_t *)(static_pt_pool + static_pt_used * 4096u);
     static_pt_used++;
-    return p;
+    return p;   /* BSS → already zero, no memset needed */
 }
 
 /* ---------------------------------------------------------------
@@ -93,23 +80,17 @@ static page_entry_t *alloc_from_static_pool(void)
 static uint64_t current_pml4_phys = 0;
 
 /* ---------------------------------------------------------------
- * alloc_table — allocate one 4 KB page-table page.
- *
- * Priority:
- *   1. Try PMM (normal path — after pmm_init() with MB2 mmap).
- *   2. Fall back to static pool (no PMM / early boot).
+ * alloc_table — try PMM first, fall back to static pool.
  * --------------------------------------------------------------- */
 static page_entry_t *alloc_table(void)
 {
     uint64_t phys = pmm_alloc_page();
     if (phys != PMM_ALLOC_FAIL) {
-        /* PMM page: zero it (PMM doesn't guarantee zeroed pages) */
         page_entry_t *tbl = (page_entry_t *)PHYS_TO_VIRT(phys);
         for (uint32_t i = 0; i < ENTRIES_PER_TABLE; i++)
             tbl[i] = 0;
         return tbl;
     }
-    /* PMM unavailable — use static pool (BSS, already zero) */
     return alloc_from_static_pool();
 }
 
@@ -129,7 +110,7 @@ static page_entry_t *get_or_create(page_entry_t *table, uint32_t idx,
 }
 
 /* ---------------------------------------------------------------
- * vmm_map_page — map one virtual page → physical frame.
+ * vmm_map_page
  * --------------------------------------------------------------- */
 void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
 {
@@ -152,19 +133,15 @@ void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
 void vmm_unmap_page(uint64_t virt)
 {
     page_entry_t *pml4 = (page_entry_t *)PHYS_TO_VIRT(current_pml4_phys);
-
     if (!(pml4[PML4_IDX(virt)] & PAGE_PRESENT)) return;
     page_entry_t *pdpt = (page_entry_t *)PHYS_TO_VIRT(
                           pml4[PML4_IDX(virt)] & PHYS_ADDR_MASK);
-
     if (!(pdpt[PDPT_IDX(virt)] & PAGE_PRESENT)) return;
     page_entry_t *pd   = (page_entry_t *)PHYS_TO_VIRT(
                           pdpt[PDPT_IDX(virt)] & PHYS_ADDR_MASK);
-
     if (!(pd[PD_IDX(virt)] & PAGE_PRESENT)) return;
     page_entry_t *pt   = (page_entry_t *)PHYS_TO_VIRT(
                           pd[PD_IDX(virt)] & PHYS_ADDR_MASK);
-
     pt[PT_IDX(virt)] = 0;
     __asm__ volatile ("invlpg (%0)" :: "r"(virt) : "memory");
 }
@@ -178,21 +155,18 @@ uint64_t vmm_virt_to_phys(uint64_t virt)
     if (!(pml4[PML4_IDX(virt)] & PAGE_PRESENT)) return PMM_ALLOC_FAIL;
     page_entry_t *pdpt = (page_entry_t *)PHYS_TO_VIRT(
                           pml4[PML4_IDX(virt)] & PHYS_ADDR_MASK);
-
     if (!(pdpt[PDPT_IDX(virt)] & PAGE_PRESENT)) return PMM_ALLOC_FAIL;
     page_entry_t *pd   = (page_entry_t *)PHYS_TO_VIRT(
                           pdpt[PDPT_IDX(virt)] & PHYS_ADDR_MASK);
-
     if (!(pd[PD_IDX(virt)] & PAGE_PRESENT)) return PMM_ALLOC_FAIL;
     page_entry_t *pt   = (page_entry_t *)PHYS_TO_VIRT(
                           pd[PD_IDX(virt)] & PHYS_ADDR_MASK);
-
     if (!(pt[PT_IDX(virt)] & PAGE_PRESENT)) return PMM_ALLOC_FAIL;
     return (pt[PT_IDX(virt)] & PHYS_ADDR_MASK) | (virt & 0xFFF);
 }
 
 /* ---------------------------------------------------------------
- * vmm_map_range
+ * vmm_map_range — map `count` pages virt_start → phys_start.
  * --------------------------------------------------------------- */
 void vmm_map_range(uint64_t virt_start, uint64_t phys_start,
                    size_t count, uint64_t flags)
@@ -202,6 +176,27 @@ void vmm_map_range(uint64_t virt_start, uint64_t phys_start,
                      phys_start + (uint64_t)i * PAGE_SIZE,
                      flags);
     }
+}
+
+/* ---------------------------------------------------------------
+ * vmm_map_mmio — identity-map an MMIO region with cache-disable.
+ *
+ * MMIO addresses (LAPIC @ 0xFEE00000, IOAPIC @ 0xFEC00000, etc.)
+ * live far above the 64 MB identity window.  They MUST be mapped
+ * before any driver reads or writes a device register, otherwise
+ * the first access triggers a #PF (error code 0x2 = write to a
+ * non-present page).
+ *
+ * PAGE_NOCACHE (PCD, bit 4) ensures the CPU never serves a read
+ * from its cache and never coalesces writes — both critical for
+ * memory-mapped device registers.
+ * --------------------------------------------------------------- */
+void vmm_map_mmio(uint64_t phys_base, size_t page_count)
+{
+    vmm_map_range(
+        phys_base, phys_base, page_count,
+        PAGE_PRESENT | PAGE_WRITE | PAGE_NOCACHE
+    );
 }
 
 /* ---------------------------------------------------------------
@@ -216,26 +211,19 @@ void vmm_switch_directory(uint64_t pml4_phys)
 uint64_t vmm_get_current_pml4(void) { return current_pml4_phys; }
 
 /* ---------------------------------------------------------------
- * vmm_init — set up identity map for the first 64 MB.
+ * vmm_init — identity-map first 64 MB and install CR3.
  *
- * Called BEFORE pmm_init() when no MB2 mmap is available.
- * In that case alloc_table() automatically falls back to the
- * static BSS pool — no PMM needed for the initial page tables.
- *
- * After pmm_init() runs (if MB2 mmap is present), subsequent
- * vmm_map_page() calls use the PMM normally.
+ * MMIO regions (LAPIC, IOAPIC) are NOT mapped here — each driver
+ * calls vmm_map_mmio() before its first register access.
  * --------------------------------------------------------------- */
 #define IDENTITY_MAP_MB     64u
 #define IDENTITY_MAP_PAGES  ((IDENTITY_MAP_MB * 1024u * 1024u) / PAGE_SIZE)
 
 void vmm_init(void)
 {
-    /* Allocate PML4 — uses static pool if PMM not yet ready */
     page_entry_t *pml4 = alloc_table();
-    /* alloc_from_static_pool() halts on exhaustion, so pml4 != NULL */
-    current_pml4_phys = VIRT_TO_PHYS(pml4);
+    current_pml4_phys  = VIRT_TO_PHYS(pml4);
 
-    /* Identity-map 0 → 64 MB */
     vmm_map_range(0, 0, IDENTITY_MAP_PAGES, PAGE_PRESENT | PAGE_WRITE);
 
     vmm_switch_directory(current_pml4_phys);
