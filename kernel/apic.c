@@ -1,25 +1,31 @@
 /* ============================================================
  * AIOS - APIC Driver
  * Phase 1.2 - Legacy PIC remap + disable, Local APIC init,
- *             I/O APIC IRQ0->vector 32 routing, apic_send_eoi()
+ *             apic_send_eoi()
  *
- * FIX (May 2026) - #PF on first LAPIC register write
+ * FIX 1 (May 2026) - #PF on first LAPIC register write
  * -----------------------------------------------------------
  * LAPIC MMIO is at 0xFEE00000 and IOAPIC at 0xFEC00000.
- * Both are at the top of the 32-bit address space (~4 GB).
- * The kernel VMM identity-maps only the first 64 MB at boot
- * (0x000000 - 0x3FFFFFF), so any access to these addresses
- * fired a Page Fault (#PF, vector 0xE, error 0x2 = write to
- * non-present page) before a single APIC register was touched.
+ * The kernel VMM identity-maps only the first 64 MB at boot,
+ * so both regions must be explicitly mapped via vmm_map_mmio()
+ * before any register access.
  *
- * Fix: call vmm_map_mmio() for BOTH regions at the very top
- * of apic_init(), before pic_remap_and_disable() or any
- * lapic_read/lapic_write/ioapic_read_reg/ioapic_write_reg
- * helper is called.
+ * FIX 2 (May 2026) - IRQ0 hang after STI
+ * -----------------------------------------------------------
+ * The original apic_init() called ioapic_route_irq0() to route
+ * IRQ0 -> vector 0x20 BEFORE kernel_main had registered the IDT
+ * handler at 0x20.  The very first PIT tick (which fires as soon
+ * as STI is executed) was delivered to the default unhandled stub
+ * which does NOT call apic_send_eoi().  The Local APIC then marks
+ * vector 0x20 as In-Service (ISR bit set) permanently, blocking
+ * ALL further interrupts -- the tick counter never increments and
+ * pit_sleep_ms() hangs forever.
  *
- * PAGE_NOCACHE is mandatory for MMIO - it sets PCD (bit 4)
- * which prevents the CPU from caching device register reads
- * or coalescing device register writes.
+ * Fix: remove ioapic_route_irq0() from apic_init() entirely.
+ * IRQ0 is now routed in kernel_main via ioapic_route(0, 0x20, 0)
+ * AFTER idt_register_handler(0x20, pit_irq_handler) is called,
+ * exactly the same pattern used for keyboard (IRQ1) and mouse
+ * (IRQ12).
  * ============================================================ */
 
 #include "apic.h"
@@ -144,45 +150,27 @@ static void lapic_enable(void)
 }
 
 /* ============================================================
- * Step 3 - Route IRQ0 (PIT timer) via the I/O APIC
- * ============================================================ */
-
-static void ioapic_route_irq0(void)
-{
-    uint8_t reg_lo = (uint8_t)(IOAPIC_REDTBL_BASE + 0 * 2);
-    uint8_t reg_hi = (uint8_t)(IOAPIC_REDTBL_BASE + 0 * 2 + 1);
-
-    ioapic_write_reg(reg_hi, (uint32_t)(0u << 24));
-    ioapic_write_reg(reg_lo,
-        IOAPIC_DELMOD_FIXED |
-        IOAPIC_DESTMOD_PHYS |
-        0x20u
-    );
-}
-
-/* ============================================================
- * apic_init - full Phase 1.2 initialisation
+ * apic_init
  *
- * FIRST ACTION: map the LAPIC and IOAPIC MMIO pages.
- * Nothing that touches a device register may run before this.
+ * Responsibilities:
+ *   1. Map LAPIC + IOAPIC MMIO pages (must be first)
+ *   2. Remap + disable legacy 8259 PIC
+ *   3. Enable Local APIC via MSR
+ *
+ * NOT done here: routing individual IRQs via the I/O APIC.
+ * Each IRQ must be routed in kernel_main AFTER its IDT handler
+ * is registered with idt_register_handler(), so that the first
+ * delivered interrupt always finds a valid handler that calls
+ * apic_send_eoi().  Routing before handler registration leaves
+ * a window where the APIC can deliver to an unhandled stub,
+ * causing a permanent ISR stall (no EOI -> all IRQs blocked).
+ *
+ * Use ioapic_route(irq, vector, dest) from kernel_main.
  * ============================================================ */
 
 void apic_init(void)
 {
-    /* ----------------------------------------------------------
-     * 0. Map LAPIC and IOAPIC MMIO regions into the page tables.
-     *
-     * LAPIC:  0xFEE00000 - 0xFEE00FFF  (1 page, 4 KB)
-     * IOAPIC: 0xFEC00000 - 0xFEC00FFF  (1 page, 4 KB)
-     *
-     * vmm_map_mmio() uses PAGE_PRESENT | PAGE_WRITE | PAGE_NOCACHE
-     * (PCD bit set) which is the correct attribute for all MMIO.
-     *
-     * These calls must come before ANY lapic_read/write or
-     * ioapic_read_reg/ioapic_write_reg - including CERTAINLY
-     * before lapic_enable() or ioapic_route_irq0().
-     * The PIC remap below uses port I/O so it is always safe.
-     * ---------------------------------------------------------- */
+    /* 0. Map LAPIC and IOAPIC MMIO pages. */
     vmm_map_mmio(LAPIC_BASE,  1);   /* Local APIC  @ 0xFEE00000 */
     vmm_map_mmio(IOAPIC_BASE, 1);   /* I/O APIC    @ 0xFEC00000 */
 
@@ -209,13 +197,7 @@ void apic_init(void)
     vga_putdec(apic_get_id());
     vga_putchar('\n');
 
-    /* 3. Route IRQ0 (PIT timer) -> vector 0x20 on BSP. */
-    ioapic_route_irq0();
-    vga_puts_color(
-        "  [ OK ] I/O APIC: IRQ0 (PIT) -> vector 0x20 on BSP\n",
-        VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK
-    );
-
+    /* Print I/O APIC version info (read-only, safe any time after MMIO map). */
     uint32_t ioapic_ver = ioapic_read_reg(IOAPIC_REG_VER);
     uint8_t  max_redir  = (uint8_t)((ioapic_ver >> 16) & 0xFF);
     vga_puts_color("  [ OK ] I/O APIC version=0x",
@@ -224,6 +206,10 @@ void apic_init(void)
     vga_puts_color("  max_redir=", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
     vga_putdec(max_redir + 1u);
     vga_puts_color(" entries\n", VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+
+    /* NOTE: No ioapic_route() calls here.
+     * IRQ routing is done in kernel_main after IDT handlers are
+     * registered.  See kernel_main.c for the correct order. */
 }
 
 /* ============================================================
@@ -266,7 +252,11 @@ void apic_timer_init(uint32_t initial_count)
 }
 
 /* ============================================================
- * ioapic_route - generic (any IRQ, any vector, any destination)
+ * ioapic_route - route one IRQ to an IDT vector on a given CPU.
+ *
+ * Call this from kernel_main AFTER registering the IDT handler
+ * for `vector` via idt_register_handler().  Never call before
+ * the handler is in place.
  * ============================================================ */
 
 void ioapic_route(uint8_t irq, uint8_t vector, uint8_t dest_apic_id)
@@ -274,11 +264,14 @@ void ioapic_route(uint8_t irq, uint8_t vector, uint8_t dest_apic_id)
     uint8_t reg_lo = (uint8_t)(IOAPIC_REDTBL_BASE + (uint8_t)(irq * 2u));
     uint8_t reg_hi = (uint8_t)(reg_lo + 1u);
 
+    /* Write hi word first (destination), then lo word (vector + flags).
+     * Writing lo last atomically enables delivery. */
     ioapic_write_reg(reg_hi, (uint32_t)dest_apic_id << 24);
     ioapic_write_reg(reg_lo,
         IOAPIC_DELMOD_FIXED |
         IOAPIC_DESTMOD_PHYS |
         (uint32_t)vector
+        /* IOAPIC_MASKED bit NOT set -> entry is live immediately */
     );
 }
 
