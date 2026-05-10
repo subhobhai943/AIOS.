@@ -1,7 +1,37 @@
 /* ============================================================
  * AIOS — Interrupt Descriptor Table (IDT)
  * Phase 1.1 — All 256 gates, exception register dump + halt,
- *             idt_flush(), PIC remap (IRQs → vectors 32–47)
+ *             idt_flush()
+ *
+ * FIX (May 2026) — isr_dispatch sent PIC EOI for vectors 32–47
+ * -----------------------------------------------------------
+ * The original isr_dispatch() had a branch for vectors 32–47
+ * that sent outb(PIC1_CMD, PIC_EOI) after calling the handler.
+ * This was correct when using the legacy 8259 PIC.  Phase 1.2
+ * disables the 8259 entirely and routes all IRQs through the
+ * I/O APIC + Local APIC.  With the PIC dead:
+ *
+ *   (a) The PIC EOI write is a no-op — it doesn't clear anything
+ *       in the Local APIC's ISR (In-Service Register).
+ *   (b) The Local APIC ISR bit for the delivered vector is only
+ *       cleared by writing 0 to the LAPIC EOI register
+ *       (apic_send_eoi()).  If that write never happens, the
+ *       LAPIC marks the vector as permanently In-Service and
+ *       will not deliver any further interrupt of equal or lower
+ *       priority — the tick counter never increments and
+ *       pit_sleep_ms() hangs forever.
+ *
+ * Fix: remove ALL EOI logic from isr_dispatch().  The dispatch
+ * function now only calls the registered handler (if any) for
+ * every vector ≥ 32.  Each IRQ handler in kernel_main.c is
+ * responsible for calling apic_send_eoi() as its last action.
+ * This is the correct APIC programming model.
+ *
+ * Also removed: pic_remap() call from idt_init().  The 8259
+ * will be fully remapped AND masked by apic_init() which runs
+ * immediately after idt_init().  Remapping here and again in
+ * apic_init() causes a brief window where stray PIC IRQs can
+ * fire into the wrong vectors.
  * ============================================================ */
 
 #include "include/idt.h"
@@ -53,49 +83,6 @@ static idt_ptr_t   idt_ptr;
 static isr_handler_t isr_handlers[IDT_ENTRIES];
 
 /* ============================================================
- * PORT I/O
- * ============================================================ */
-
-static inline void outb(uint16_t port, uint8_t val)
-{
-    __asm__ volatile ("outb %0, %1" :: "a"(val), "Nd"(port));
-}
-
-static inline uint8_t inb(uint16_t port)
-{
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-/* ============================================================
- * PIC
- * ============================================================ */
-
-#define PIC1_CMD   0x20
-#define PIC1_DATA  0x21
-#define PIC2_CMD   0xA0
-#define PIC2_DATA  0xA1
-#define PIC_EOI    0x20
-
-static void pic_remap(int offset1, int offset2)
-{
-    uint8_t mask1 = inb(PIC1_DATA);
-    uint8_t mask2 = inb(PIC2_DATA);
-
-    outb(PIC1_CMD,  0x11);
-    outb(PIC2_CMD,  0x11);
-    outb(PIC1_DATA, (uint8_t)offset1);
-    outb(PIC2_DATA, (uint8_t)offset2);
-    outb(PIC1_DATA, 0x04);   /* slave on IRQ2 */
-    outb(PIC2_DATA, 0x02);   /* cascade identity */
-    outb(PIC1_DATA, 0x01);   /* 8086 mode */
-    outb(PIC2_DATA, 0x01);
-    outb(PIC1_DATA, mask1);
-    outb(PIC2_DATA, mask2);
-}
-
-/* ============================================================
  * EXCEPTION NAME TABLE
  * ============================================================ */
 
@@ -135,19 +122,16 @@ static const char *exception_names[32] = {
 };
 
 /* ============================================================
- * REGISTER DUMP — called for CPU exceptions (vectors 0–31)
- * Prints all saved registers in a panic-style box, then halts.
+ * REGISTER DUMP — called for unhandled CPU exceptions (0–31)
  * ============================================================ */
 
 static void exception_dump(interrupt_frame_t *f)
 {
-    /* Red title bar */
     vga_puts_color("\n", VGA_COLOR_WHITE, VGA_COLOR_RED);
     vga_puts_color(" *** KERNEL EXCEPTION (PANIC) ***\n",
                    VGA_COLOR_WHITE, VGA_COLOR_RED);
     vga_puts_color(" ", VGA_COLOR_WHITE, VGA_COLOR_RED);
 
-    /* Exception name */
     vga_puts_color(" Vector 0x", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
     vga_puthex(f->int_num);
     vga_puts_color("  ", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
@@ -160,47 +144,34 @@ static void exception_dump(interrupt_frame_t *f)
     }
     vga_puts_color("\n", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
 
-    /* Error code (only meaningful for some exceptions) */
     vga_puts_color(" Error code : 0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     vga_puthex(f->err_code);
     vga_putchar('\n');
 
-    /* Separator */
     vga_puts_color("---------- Registers ----------\n",
                    VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
 
-    /* General-purpose registers */
     vga_puts_color(" RAX=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rax);
     vga_puts_color("  RBX=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rbx); vga_putchar('\n');
-
     vga_puts_color(" RCX=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rcx);
     vga_puts_color("  RDX=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rdx); vga_putchar('\n');
-
     vga_puts_color(" RSI=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rsi);
     vga_puts_color("  RDI=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rdi); vga_putchar('\n');
-
     vga_puts_color(" RBP=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rbp);
     vga_puts_color("  RSP=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->rsp); vga_putchar('\n');
-
     vga_puts_color("  R8=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r8);
     vga_puts_color("   R9=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r9);  vga_putchar('\n');
-
     vga_puts_color(" R10=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r10);
     vga_puts_color("  R11=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r11); vga_putchar('\n');
-
     vga_puts_color(" R12=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r12);
     vga_puts_color("  R13=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r13); vga_putchar('\n');
-
     vga_puts_color(" R14=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r14);
     vga_puts_color("  R15=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK); vga_puthex(f->r15); vga_putchar('\n');
 
-    /* Control / instruction registers */
     vga_puts_color("---------- Control/IP ---------\n",
                    VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-
     vga_puts_color(" RIP=0x", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK); vga_puthex(f->rip);
     vga_puts_color("   CS=0x", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK); vga_puthex(f->cs);  vga_putchar('\n');
-
     vga_puts_color(" RFLAGS=0x", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK); vga_puthex(f->rflags);
     vga_puts_color("  SS=0x",    VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK); vga_puthex(f->ss); vga_putchar('\n');
 
@@ -208,7 +179,6 @@ static void exception_dump(interrupt_frame_t *f)
                    VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
     vga_puts_color(" System halted.\n", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
 
-    /* Disable interrupts and halt forever */
     __asm__ volatile (
         "cli\n"
         "1: hlt\n"
@@ -230,7 +200,7 @@ static void idt_set_gate(
     uint64_t addr = (uint64_t)isr;
 
     idt[vec].offset_low  = (uint16_t)( addr        & 0xFFFF);
-    idt[vec].selector    = 0x08;               /* kernel code segment */
+    idt[vec].selector    = 0x08;
     idt[vec].ist         = 0;
     idt[vec].type_attr   = flags;
     idt[vec].offset_mid  = (uint16_t)((addr >> 16) & 0xFFFF);
@@ -239,42 +209,40 @@ static void idt_set_gate(
 }
 
 /* ============================================================
- * ISR DISPATCH — called from every ISR stub via isr_common_handler
+ * ISR DISPATCH — called from every ISR stub
+ *
+ * Design rule (APIC mode):
+ *   - For CPU exceptions (vec 0–31): call handler or dump+halt.
+ *   - For ALL other vectors (vec >= 32): call registered handler.
+ *     The handler is SOLELY responsible for calling
+ *     apic_send_eoi() as its last action.  isr_dispatch() must
+ *     NOT send any EOI — not to the PIC (dead) and not to the
+ *     LAPIC (that is the handler's job).  Sending EOI here would
+ *     be a double-EOI and would clear the ISR bit before the
+ *     handler has finished, allowing a second delivery of the
+ *     same vector while the first is still executing.
  * ============================================================ */
 
 void isr_dispatch(interrupt_frame_t *frame)
 {
     uint64_t vec = frame->int_num;
 
-    /* CPU exceptions (vectors 0–31): if no custom handler is
-     * registered, fall through to the default register dump. */
     if (vec < 32) {
+        /* CPU exception: use registered handler or default dump */
         if (isr_handlers[vec]) {
             isr_handlers[vec](frame);
         } else {
-            /* Default: print full register dump and halt */
             exception_dump(frame);
         }
         return;
     }
 
-    /* Hardware IRQs (vectors 32–47, remapped PIC) */
-    if (vec >= 32 && vec < 48) {
-        if (isr_handlers[vec]) {
-            isr_handlers[vec](frame);
-        }
-        /* Send End-Of-Interrupt to PIC(s) */
-        if (vec >= 40) {
-            outb(PIC2_CMD, PIC_EOI);
-        }
-        outb(PIC1_CMD, PIC_EOI);
-        return;
-    }
-
-    /* Vectors 48–255: call registered handler if any */
+    /* Hardware IRQ or software vector (>= 32):
+     * Just call the handler.  Handler must call apic_send_eoi(). */
     if (isr_handlers[vec]) {
         isr_handlers[vec](frame);
     }
+    /* No EOI here. LAPIC EOI is sent by each handler. */
 }
 
 /* ============================================================
@@ -287,8 +255,7 @@ void idt_register_handler(uint8_t vector, isr_handler_t handler)
 }
 
 /* ============================================================
- * IDT FLUSH — load the IDT pointer register
- * Called by idt_init(); may also be called after hot-patching gates.
+ * IDT FLUSH
  * ============================================================ */
 
 void idt_flush(void)
@@ -302,16 +269,14 @@ void idt_flush(void)
 
 /* ============================================================
  * IDT INIT
- * 1. Remap PIC: IRQ0-7  → vectors 32-39
- *               IRQ8-15 → vectors 40-47
- * 2. Install all 256 ISR stubs (CPU exceptions use TRAP gates,
- *    IRQs use INTERRUPT gates to avoid spurious re-entry).
- * 3. Load IDT via idt_flush().
+ *
+ * Installs all 256 ISR stubs and loads the IDT.
+ * Does NOT remap the 8259 PIC — that is done (and the PIC is
+ * fully masked) inside apic_init() which runs right after this.
  * ============================================================ */
 
 void idt_init(void)
 {
-    /* Zero out the entire IDT and handler table first */
     for (int i = 0; i < IDT_ENTRIES; i++) {
         idt[i].offset_low  = 0;
         idt[i].selector    = 0;
@@ -323,35 +288,22 @@ void idt_init(void)
         isr_handlers[i]    = 0;
     }
 
-    /* Remap the 8259 PIC so IRQ0-15 → vectors 32-47 */
-    pic_remap(0x20, 0x28);
-
-    /* Install CPU exception stubs (vectors 0–31) as TRAP gates.
-     * Trap gates do NOT clear IF, so nested interrupts are possible
-     * during exception handling if STI is later called.  For our
-     * current panic path that's fine — we cli inside exception_dump. */
+    /* CPU exception stubs (0–31): TRAP gates (IF not cleared) */
     for (int i = 0; i < 32; i++) {
         idt_set_gate((uint8_t)i, isr_stub_table[i], IDT_TRAP_GATE);
     }
 
-    /* Install hardware IRQ stubs (vectors 32–47) as INTERRUPT gates.
-     * Interrupt gates clear IF on entry, preventing nested IRQs. */
-    for (int i = 32; i < 48; i++) {
+    /* IRQ / other stubs (32–255): INTERRUPT gates (IF cleared on entry) */
+    for (int i = 32; i < IDT_ENTRIES; i++) {
         idt_set_gate((uint8_t)i, isr_stub_table[i], IDT_INTERRUPT_GATE);
     }
 
-    /* Remaining vectors 48–255 as interrupt gates (spurious / future use) */
-    for (int i = 48; i < IDT_ENTRIES; i++) {
-        idt_set_gate((uint8_t)i, isr_stub_table[i], IDT_INTERRUPT_GATE);
-    }
-
-    /* Set up IDT pointer and load */
     idt_ptr.limit = (uint16_t)(sizeof(idt) - 1);
     idt_ptr.base  = (uint64_t)&idt;
     idt_flush();
 
     vga_puts_color(
-        "  [ OK ] IDT: 256 gates installed, PIC remapped (IRQ→vec+32)\n",
+        "  [ OK ] IDT: 256 gates installed\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK
     );
 }
