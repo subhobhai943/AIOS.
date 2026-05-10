@@ -19,6 +19,15 @@
  * 3. Safe guard on all walk helpers.
  *    vmm_virt_to_phys() and vmm_unmap_page() check PAGE_PRESENT
  *    at every level so they never dereference a zero/garbage PTE.
+ *
+ * 4. STATIC BUMP FALLBACK (added May 2026).
+ *    vmm_init() is called BEFORE pmm_init() when Multiboot2 is
+ *    not available (no mmap tag).  In that case pmm_alloc_page()
+ *    returns PMM_ALLOC_FAIL immediately because total_frames==0.
+ *    We now provide a small static arena of pre-zeroed 4 KB pages
+ *    (STATIC_PT_PAGES × 4 KB = enough for PML4 + the ~130 page-
+ *    table pages needed to cover 64 MB).  The static arena is
+ *    used ONLY when the PMM has no free pages to give.
  * ============================================================ */
 
 #include <stdint.h>
@@ -29,7 +38,6 @@
 
 /* ---------------------------------------------------------------
  * In the early boot identity-mapped region phys == virt.
- * Replace these macros when moving to a higher-half layout.
  * --------------------------------------------------------------- */
 #define PHYS_TO_VIRT(p)  ((void *)(uintptr_t)(p))
 #define VIRT_TO_PHYS(v)  ((uint64_t)(uintptr_t)(v))
@@ -46,34 +54,67 @@
 #define PHYS_ADDR_MASK     (~0xFFFULL)
 
 /* ---------------------------------------------------------------
+ * Static page-table page pool
+ *
+ * Identity-mapping 64 MB requires:
+ *   1 PML4 + 1 PDPT + 1 PD + 16 PT pages  = 19 pages minimum.
+ *   We allocate 160 pages (640 KB) to give comfortable headroom
+ *   (allows up to ~320 MB identity mapping plus overhead).
+ *
+ * This pool lives in BSS (zeroed by the bootloader), so each
+ * page is already clean — no explicit zeroing needed.
+ * Used ONLY when pmm_alloc_page() returns PMM_ALLOC_FAIL.
+ * --------------------------------------------------------------- */
+#define STATIC_PT_PAGES  160u
+
+static uint8_t static_pt_pool[STATIC_PT_PAGES * 4096]
+    __attribute__((aligned(4096)));
+static uint32_t static_pt_used = 0;
+
+static page_entry_t *alloc_from_static_pool(void)
+{
+    if (static_pt_used >= STATIC_PT_PAGES) {
+        vga_puts_color(
+            "[FAIL] VMM: static PT pool exhausted\n",
+            VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK
+        );
+        for (;;) __asm__ volatile ("hlt");
+    }
+    /* BSS is zero-initialised, so no memset needed */
+    page_entry_t *p =
+        (page_entry_t *)(static_pt_pool + static_pt_used * 4096u);
+    static_pt_used++;
+    return p;
+}
+
+/* ---------------------------------------------------------------
  * State
  * --------------------------------------------------------------- */
 static uint64_t current_pml4_phys = 0;
 
 /* ---------------------------------------------------------------
- * alloc_table — allocate and zero one 4 KB page-table page.
+ * alloc_table — allocate one 4 KB page-table page.
  *
- * Critical: we obtain a PHYSICAL address from the PMM, then
- * convert it to a virtual pointer via PHYS_TO_VIRT() for
- * zeroing.  In the identity-mapped phase these are equal.
+ * Priority:
+ *   1. Try PMM (normal path — after pmm_init() with MB2 mmap).
+ *   2. Fall back to static pool (no PMM / early boot).
  * --------------------------------------------------------------- */
 static page_entry_t *alloc_table(void)
 {
     uint64_t phys = pmm_alloc_page();
-    if (phys == PMM_ALLOC_FAIL) return (page_entry_t *)0;  /* OOM */
-
-    page_entry_t *tbl = (page_entry_t *)PHYS_TO_VIRT(phys);
-    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; i++)
-        tbl[i] = 0;
-    return tbl;
+    if (phys != PMM_ALLOC_FAIL) {
+        /* PMM page: zero it (PMM doesn't guarantee zeroed pages) */
+        page_entry_t *tbl = (page_entry_t *)PHYS_TO_VIRT(phys);
+        for (uint32_t i = 0; i < ENTRIES_PER_TABLE; i++)
+            tbl[i] = 0;
+        return tbl;
+    }
+    /* PMM unavailable — use static pool (BSS, already zero) */
+    return alloc_from_static_pool();
 }
 
 /* ---------------------------------------------------------------
- * get_or_create — return (virtual) pointer to child table,
- * allocating it if the entry is not yet present.
- *
- * flags is ORed into the new entry (in addition to PRESENT|WRITE).
- * Kernel-only tables must NOT have PAGE_USER set.
+ * get_or_create — return child table pointer, creating if absent.
  * --------------------------------------------------------------- */
 static page_entry_t *get_or_create(page_entry_t *table, uint32_t idx,
                                    uint64_t flags)
@@ -106,8 +147,7 @@ void vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags)
 }
 
 /* ---------------------------------------------------------------
- * vmm_unmap_page — zero the PTE and flush TLB.
- * Guards every level with a PAGE_PRESENT check.
+ * vmm_unmap_page
  * --------------------------------------------------------------- */
 void vmm_unmap_page(uint64_t virt)
 {
@@ -130,8 +170,7 @@ void vmm_unmap_page(uint64_t virt)
 }
 
 /* ---------------------------------------------------------------
- * vmm_virt_to_phys — walk page tables safely; return
- * PMM_ALLOC_FAIL if any level is not present.
+ * vmm_virt_to_phys
  * --------------------------------------------------------------- */
 uint64_t vmm_virt_to_phys(uint64_t virt)
 {
@@ -153,7 +192,7 @@ uint64_t vmm_virt_to_phys(uint64_t virt)
 }
 
 /* ---------------------------------------------------------------
- * vmm_map_range — map [virt, virt + count*PAGE) → [phys, ...]
+ * vmm_map_range
  * --------------------------------------------------------------- */
 void vmm_map_range(uint64_t virt_start, uint64_t phys_start,
                    size_t count, uint64_t flags)
@@ -166,7 +205,7 @@ void vmm_map_range(uint64_t virt_start, uint64_t phys_start,
 }
 
 /* ---------------------------------------------------------------
- * vmm_switch_directory — load CR3.
+ * vmm_switch_directory
  * --------------------------------------------------------------- */
 void vmm_switch_directory(uint64_t pml4_phys)
 {
@@ -177,34 +216,34 @@ void vmm_switch_directory(uint64_t pml4_phys)
 uint64_t vmm_get_current_pml4(void) { return current_pml4_phys; }
 
 /* ---------------------------------------------------------------
- * vmm_init — set up identity map for the first IDENTITY_MAP_MB MB.
+ * vmm_init — set up identity map for the first 64 MB.
  *
- * Why 64 MB?
- *   pmm_alloc_page() scans from frame 1 upward; page-table pages
- *   could land anywhere in available RAM.  64 MB gives plenty of
- *   headroom for the early kernel + initial heap before we set up
- *   a proper higher-half map.
+ * Called BEFORE pmm_init() when no MB2 mmap is available.
+ * In that case alloc_table() automatically falls back to the
+ * static BSS pool — no PMM needed for the initial page tables.
+ *
+ * After pmm_init() runs (if MB2 mmap is present), subsequent
+ * vmm_map_page() calls use the PMM normally.
  * --------------------------------------------------------------- */
-#define IDENTITY_MAP_MB   64u
+#define IDENTITY_MAP_MB     64u
 #define IDENTITY_MAP_PAGES  ((IDENTITY_MAP_MB * 1024u * 1024u) / PAGE_SIZE)
 
 void vmm_init(void)
 {
+    /* Allocate PML4 — uses static pool if PMM not yet ready */
     page_entry_t *pml4 = alloc_table();
-    if (!pml4) {
-        vga_puts("[FAIL] VMM: out of memory for PML4\n");
-        for (;;) __asm__ volatile ("hlt");
-    }
+    /* alloc_from_static_pool() halts on exhaustion, so pml4 != NULL */
     current_pml4_phys = VIRT_TO_PHYS(pml4);
 
-    /* Identity-map the first 64 MB: virt 0 → phys 0 */
+    /* Identity-map 0 → 64 MB */
     vmm_map_range(0, 0, IDENTITY_MAP_PAGES, PAGE_PRESENT | PAGE_WRITE);
 
     vmm_switch_directory(current_pml4_phys);
 
-    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_puts("  [ OK ] VMM init — identity mapped first ");
-    vga_putdec(IDENTITY_MAP_MB);
-    vga_puts(" MB\n");
-    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+    vga_puts_color(
+        "  [ OK ] VMM: identity mapped first 64 MB (static pool used: ",
+        VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK
+    );
+    vga_putdec(static_pt_used);
+    vga_puts_color(" pages)\n", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
 }
