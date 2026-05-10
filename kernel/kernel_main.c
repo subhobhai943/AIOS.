@@ -1,23 +1,21 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 1.2 : APIC — legacy PIC disabled, Local APIC + IOAPIC
+ * Phase 1.3 : PIT timer — IRQ0 wired, 1000 Hz tick counter
  *
- * Argument layout (System V AMD64 ABI):
- *   RDI = multiboot2 boot magic  (0x36D76289)
- *   RSI = multiboot2 info struct physical address
+ * Previous phase: Phase 1.2 — APIC (legacy PIC dead,
+ *                 Local APIC + I/O APIC active).
  *
- * FIX (May 2026): kernel_entry.asm previously passed only RDI
- * (the info pointer).  The magic was never forwarded, so the
- * MB2 check always failed, PMM was skipped (total_frames = 0),
- * pmm_alloc_page() returned PMM_ALLOC_FAIL, and vmm_init()
- * halted with "out of memory for PML4".
+ * What's new in this phase:
+ *   - pit_init(1000) called AFTER apic_init() (APIC must be up
+ *     before IRQ0 can fire through the I/O APIC).
+ *   - IRQ0 (vector 0x20) registered in IDT → pit_irq_handler().
+ *   - pit_irq_handler() calls pit_tick() then apic_send_eoi().
+ *   - Tick-count smoke-test: waits 1 second via pit_sleep_ms(),
+ *     then reads the tick counter; prints PASS if >= 900.
  *
- * Fix applied in two places:
- *   1. boot/kernel_entry.asm — saves EAX (magic) and EBX
- *      (info ptr) immediately at entry, then loads both into
- *      RDI and RSI before calling kernel_main.
- *   2. kernel/vmm.c — added a 640 KB static BSS page-table
- *      pool so vmm_init() works even without PMM (defensive).
+ * Parameter layout (System V AMD64 ABI, set by kernel_entry.asm):
+ *   RDI = magic  (0x36D76289)
+ *   RSI = addr   (physical address of Multiboot2 info struct)
  * ============================================================ */
 
 #include "include/vga.h"
@@ -28,6 +26,7 @@
 #include "include/heap.h"
 #include "include/keyboard.h"
 #include "include/mouse.h"
+#include "include/pit.h"
 #include "apic.h"
 
 #include <stdint.h>
@@ -46,7 +45,7 @@ extern uint8_t _kernel_start;
 extern uint8_t _kernel_end;
 
 /* ---------------------------------------------------------------
- * Heap size
+ * Heap size (2 MB)
  * --------------------------------------------------------------- */
 #define HEAP_SIZE   (2u * 1024u * 1024u)
 
@@ -76,7 +75,7 @@ static void print_fail(const char *msg)
 }
 
 /* ---------------------------------------------------------------
- * find_mmap_tag
+ * find_mmap_tag — walk Multiboot2 tags to find the memory map
  * --------------------------------------------------------------- */
 static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
 {
@@ -113,7 +112,21 @@ static void de_test_handler(interrupt_frame_t *frame)
 }
 
 /* ---------------------------------------------------------------
- * IRQ handlers — all MUST call apic_send_eoi() at the end.
+ * IRQ0 — PIT timer tick
+ *
+ * Called from IDT vector 0x20 (IRQ0, routed via I/O APIC).
+ * Must call apic_send_eoi() — NOT outb(0x20,0x20); the legacy
+ * 8259 PIC is disabled since Phase 1.2.
+ * --------------------------------------------------------------- */
+static void pit_irq_handler(interrupt_frame_t *f)
+{
+    (void)f;
+    pit_tick();
+    apic_send_eoi();
+}
+
+/* ---------------------------------------------------------------
+ * IRQ1 — PS/2 Keyboard
  * --------------------------------------------------------------- */
 static void kbd_isr(interrupt_frame_t *f)
 {
@@ -122,6 +135,9 @@ static void kbd_isr(interrupt_frame_t *f)
     apic_send_eoi();
 }
 
+/* ---------------------------------------------------------------
+ * IRQ12 — PS/2 Mouse
+ * --------------------------------------------------------------- */
 static void mouse_isr(interrupt_frame_t *f)
 {
     (void)f;
@@ -132,9 +148,8 @@ static void mouse_isr(interrupt_frame_t *f)
 /* ---------------------------------------------------------------
  * kernel_main
  *
- * Parameters (System V AMD64 ABI):
- *   magic — RDI — should equal MULTIBOOT2_MAGIC (0x36D76289)
- *   addr  — RSI — physical address of multiboot2 info struct
+ *   magic — RDI — 0x36D76289
+ *   addr  — RSI — physical address of Multiboot2 info struct
  * --------------------------------------------------------------- */
 void kernel_main(uint32_t magic, uint32_t addr)
 {
@@ -147,7 +162,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 1.2 : Local APIC + I/O APIC\n",
+        "  Phase 1.3 : PIT Timer — 1000 Hz tick counter\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
@@ -157,7 +172,6 @@ void kernel_main(uint32_t magic, uint32_t addr)
     if (magic == MULTIBOOT2_MAGIC) {
         print_ok("Multiboot2 magic OK");
     } else {
-        /* Print the actual magic we received for debugging */
         vga_puts_color("[WARN] MB2 magic mismatch: got 0x",
                        VGA_COLOR_BROWN, VGA_COLOR_BLACK);
         vga_puthex((uint64_t)magic);
@@ -188,13 +202,8 @@ void kernel_main(uint32_t magic, uint32_t addr)
     idt_register_handler(0, 0);
 
     /* ---- VMM ------------------------------------------------- */
-    /* NOTE: vmm_init() is called BEFORE pmm_init().
-     * If MB2 mmap is missing, vmm_init() uses the static BSS pool.
-     * If MB2 mmap is present, pmm_alloc_page() is not yet ready
-     * at this point — vmm_init() still uses the static pool for
-     * the initial page-table pages, then PMM takes over for all
-     * subsequent vmm_map_page() calls after pmm_init() below. */
     vmm_init();
+    print_ok("VMM: 4-level paging, 64 MB identity map");
 
     /* ---- PMM ------------------------------------------------- */
     if (magic == MULTIBOOT2_MAGIC) {
@@ -219,7 +228,22 @@ void kernel_main(uint32_t magic, uint32_t addr)
 
     /* ---- APIC ----------------------------------------------- */
     apic_init();
-    print_ok("APIC: legacy PIC dead, LAPIC+IOAPIC active");
+    print_ok("APIC: legacy PIC dead, LAPIC + I/O APIC active");
+
+    /* ---- PIT — wire BEFORE sti ------------------------------ */
+    /*
+     * Order matters:
+     *   1. apic_init() has already routed IRQ0 → vector 0x20.
+     *   2. We register the IDT handler for 0x20.
+     *   3. pit_init() programs PIT channel 0.  The chip will
+     *      start firing IRQ0 immediately after this call, but
+     *      interrupts are still masked (CLI), so no spurious
+     *      tick fires before the IDT entry is installed.
+     *   4. STI below unmasks everything.
+     */
+    idt_register_handler(0x20, pit_irq_handler);
+    pit_init(1000);          /* 1000 Hz → 1 ms per tick        */
+    print_ok("PIT: channel 0 at 1000 Hz, IRQ0 → vec 0x20");
 
     /* ---- Route keyboard + mouse via IOAPIC ------------------- */
     ioapic_route(1,  0x21, 0);   /* IRQ1  keyboard → IDT[33] */
@@ -233,12 +257,41 @@ void kernel_main(uint32_t magic, uint32_t addr)
     mouse_init();
     print_ok("Mouse: APIC IRQ12 → vec 0x2C");
 
-    /* ---- Enable interrupts ----------------------------------- */
+    /* ---- Enable interrupts — PIT starts ticking ------------- */
     __asm__ volatile ("sti");
-    print_ok("Interrupts enabled (STI)");
+    print_ok("Interrupts enabled (STI) — PIT ticking");
+
+    /* ---- Phase 1.3 smoke-test: tick counter for 1 second ---- */
+    vga_puts_color(
+        "\n  [TEST] Waiting 1 second via pit_sleep_ms(1000)...\n",
+        VGA_COLOR_BROWN, VGA_COLOR_BLACK
+    );
+    uint64_t t0 = pit_get_ticks();
+    pit_sleep_ms(1000);
+    uint64_t t1 = pit_get_ticks();
+    uint64_t elapsed = t1 - t0;
+
+    vga_puts_color("  [TEST] Ticks elapsed: ",
+                   VGA_COLOR_BROWN, VGA_COLOR_BLACK);
+    vga_putdec(elapsed);
+    vga_putchar('\n');
+
+    /*
+     * Accept 900–1100 ticks.  Exact 1000 is unlikely due to PIT
+     * rounding (divisor = 1193182 / 1000 = 1193, actual rate
+     * ≈ 999.8 Hz) and the time spent in initialization above.
+     */
+    if (elapsed >= 900ULL && elapsed <= 1100ULL) {
+        print_ok("PIT tick test PASSED (expected ~1000)");
+    } else if (elapsed > 0) {
+        vga_puts_color("[WARN] Tick count out of range — check APIC/IRQ0 routing\n",
+                       VGA_COLOR_BROWN, VGA_COLOR_BLACK);
+    } else {
+        print_fail("PIT tick test FAILED — ticks=0, IRQ0 not firing");
+    }
 
     vga_putchar('\n');
-    vga_puts_color("AIOS boot complete. Waiting for input...\n",
+    vga_puts_color("AIOS Phase 1.3 boot complete.  Waiting for input...\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
 
     for (;;) __asm__ volatile ("hlt");
