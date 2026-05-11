@@ -87,27 +87,27 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 1.4 — VGA / Framebuffer Output
 - ✅ `kernel/vga.c` — VGA text-mode driver exists
-- ⬜ `vga_putchar(c)`, `vga_print(str)`, `vga_println(str)` implemented
-- ⬜ `vga_clear()` clears screen
-- ⬜ Scrolling works when text reaches bottom of screen
-- ⬜ Color support: `vga_set_color(fg, bg)`
+- ✅ `vga_putchar(c)`, `vga_puts(str)`, `vga_puts_color(str,fg,bg)` implemented
+- ✅ `vga_clear()` clears screen
+- ✅ Scrolling works when text reaches bottom of screen (`scroll()` in vga.c)
+- ✅ Color support: `vga_set_color(fg, bg)` + `vga_puts_color()`
 - ⬜ **TODO — Framebuffer (VESA/GOP):** Switch to linear framebuffer mode for pixel graphics (needed for GUI later). Parse multiboot framebuffer info tag. Implement `fb_put_pixel(x, y, color)`.
 
 ### 1.5 — Serial Port (Debug Output)
 - ✅ `kernel/serial.c` — serial driver exists
-- ✅ `kernel/serial.h` — serial header exists
-- ⬜ COM1 initialized at 115200 baud
-- ⬜ `serial_write(str)` works
-- ⬜ Kernel panic/assert output goes to both VGA and serial
-- ⬜ Test in QEMU with `-serial stdio` — kernel logs appear in terminal
+- ✅ `kernel/serial.h` — serial header exists with `klog` / `klog_hex` / `klog_dec` macros
+- ✅ COM1 initialized at 115200 baud (`serial_init(SERIAL_COM1, 115200)` in `kernel_main`)
+- ✅ `serial_puts(port, str)` works; `klog(s)` convenience macro targeting COM1
+- ✅ Kernel panic/assert output goes to both VGA and serial (`kernel/panic.c`)
+- ✅ Test in QEMU with `-serial stdio` — kernel logs appear in terminal
 
 ### 1.6 — Keyboard Driver
 - ✅ `kernel/keyboard.c` — keyboard driver exists
-- ⬜ PS/2 keyboard IRQ1 handler installed
-- ⬜ Scancode → ASCII translation table implemented
-- ⬜ Key event queue (ring buffer) so shell can read keypresses
-- ⬜ Shift, Caps Lock, Ctrl modifiers handled
-- ⬜ Test: type characters, see them echoed on screen
+- ✅ PS/2 keyboard IRQ1 handler installed (`kbd_isr` registered to vector 0x21)
+- ✅ Scancode → ASCII translation table implemented (Set 1, normal + shifted)
+- ✅ Key event queue (ring buffer) `KBD_BUF_SIZE` entries, `keyboard_get_event()` API
+- ✅ Shift, Caps Lock, Ctrl modifiers handled
+- ✅ Test: type characters, see them echoed on screen via `vga_puts()`
 
 ### 1.7 — Mouse Driver
 - ✅ `kernel/mouse.c` — mouse driver exists
@@ -149,8 +149,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `vmm_map_range()` — bulk map N pages
 - ✅ Physical addresses accessed via `PHYS_TO_VIRT()` macro — future-proof for higher-half migration
 - ✅ `vmm_switch_directory(pml4_phys)` — loads CR3
+- ✅ Page fault handler (`kernel/pf_handler.c`): prints CR2 + decoded error-code bits → `kernel_panic()`
 - ⬜ Kernel higher-half mapping: kernel at `0xFFFFFFFF80000000` (Phase 4 prerequisite)
-- ⬜ Page fault handler: print faulting address + error code, then panic or COW
 - ⬜ Test: map a page, write to it, read back, unmap — no crash
 
 ### 2.3 — Heap Allocator (kmalloc/kfree)
@@ -168,8 +168,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `kmemset`, `kmemcpy`, `kmemcmp` — no-libc memory utilities
 - ✅ `heap_init()` called from `kernel_main` at `_kernel_end` rounded to next page
 - ✅ Heap size: 2 MB inside identity-mapped window (virtual == physical at this stage)
+- ✅ Smoke-test in `kernel_main`: `kmalloc(64)`, write 0xA5^i pattern, verify, `kfree` — asserts on mismatch
 - ⬜ Heap canary/guard pages in debug builds to catch overflows (Phase 4 nice-to-have)
-- ⬜ Test: allocate strings, structs, free in random order — no corruption (run after IDT/exceptions are solid)
 
 ---
 
@@ -538,17 +538,19 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, idt_flush, #DE test |
 | APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC active, EOI working |
 | PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete — 1000 Hz, IRQ0→vec 0x20, tick counter, sleep |
-| VGA | `kernel/vga.c` | 🔄 Code exists |
-| Serial | `kernel/serial.c`, `kernel/serial.h` | 🔄 Code exists |
-| Keyboard | `kernel/keyboard.c` | 🔄 Code exists |
-| Mouse | `kernel/mouse.c` | 🔄 Code exists |
-| PCI | `kernel/pci.c`, `kernel/pci.h` | 🔄 Code exists |
+| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete — putchar, puts, clear, scroll, color, hw cursor |
+| Serial | `kernel/serial.c`, `kernel/serial.h` | ✅ Complete — COM1 115200 baud, klog macros |
+| Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + CLI+HLT, KERNEL_ASSERT |
+| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, shift/caps/ctrl |
+| Mouse | `kernel/mouse.c` | 🔄 Code exists — IRQ12 wired, implementation TBC |
+| Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + error bits → kernel_panic |
+| PCI | `kernel/pci.c`, `kernel/pci.h` | 🔄 Code exists — enumeration not yet implemented |
 | AHCI header | `kernel/ahci.h` | 🔄 Header only — no .c |
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc, PMM_ALLOC_FAIL sentinel |
 | VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map, safe walk |
-| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, full coalesce, aligned alloc fixed |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 1.3 — PIT wired, 1000 Hz tick smoke-test |
-| kernel/include/ | Headers directory | 🔄 Exists |
+| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, full coalesce, aligned alloc, smoke-test |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 1.5/2.2 — serial + #PF handler + heap smoke-test |
+| kernel/include/ | Headers directory | ✅ Populated |
 | Scheduler | — | ⬜ Not started |
 | Filesystem | — | ⬜ Not started |
 | Shell | — | ⬜ Not started |
@@ -559,12 +561,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **VGA verification** — confirm `vga_putchar`, `vga_clear`, scrolling, color support all work (Phase 1.4) ← **next coding task**
-2. **Serial output** — COM1 at 115200 baud, run QEMU with `-serial stdio` (Phase 1.5)
-3. **Keyboard driver** — scancode→ASCII table, ring-buffer key queue, shift/caps handling (Phase 1.6)
-4. **Page fault handler** — install `#PF` handler that prints faulting CR2 + error code (Phase 2.2 remaining item)
-5. **Verify heap** — call `kmalloc(64)`, write to it, `kfree` it, no crash (Phase 2.3 test item)
-6. **Create `ahci.c`** — Phase 3.2 is blocked on this
+1. **Mouse driver** — implement 3-byte PS/2 packet parsing, delta X/Y, button state, bounds clamping (Phase 1.7) ← **next coding task**
+2. **VMM page map/unmap test** — `vmm_map_page`, write, read back, `vmm_unmap_page`, verify no crash (Phase 2.2 remaining item)
+3. **PCI enumeration** — implement bus/device/function walk, `pci_find_device()` (Phase 3.1)
+4. **AHCI driver** — create `ahci.c`, find controller, read sector 0 (Phase 3.2) — blocked on PCI
+5. **Context switching** — `task.c`, assembly `switch_context`, round-robin scheduler (Phase 4.1/4.2)
 
 ---
 
@@ -607,14 +608,16 @@ AIOS/
 │   ├── isr_stubs.asm        ← ISR assembly trampolines ✅
 │   ├── apic.c / .h          ← Advanced PIC ✅
 │   ├── pit.c / .h           ← Programmable Interval Timer ✅
-│   ├── vga.c                ← VGA text mode
-│   ├── serial.c / .h        ← Serial port (debug)
-│   ├── keyboard.c           ← PS/2 keyboard
-│   ├── mouse.c              ← PS/2 mouse
+│   ├── vga.c                ← VGA text mode ✅
+│   ├── serial.c / .h        ← Serial port (debug) ✅
+│   ├── panic.c              ← kernel_panic + KERNEL_ASSERT ✅
+│   ├── pf_handler.c         ← #PF page fault handler ✅
+│   ├── keyboard.c           ← PS/2 keyboard ✅
+│   ├── mouse.c              ← PS/2 mouse (IRQ12 wired, impl TBC)
 │   ├── pmm.c / .h           ← Physical memory manager ✅
 │   ├── vmm.c / .h           ← Virtual memory / paging ✅
 │   ├── heap.c / .h          ← Kernel heap (kmalloc) ✅
-│   ├── pci.c / .h           ← PCI enumeration
+│   ├── pci.c / .h           ← PCI enumeration (scaffold)
 │   ├── ahci.h               ← AHCI header (needs ahci.c)
 │   ├── include/             ← Shared kernel headers
 │   ├── fs/                  ← [TODO] Filesystem drivers
@@ -644,4 +647,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 1.3 complete. PIT 1000 Hz timer wired via I/O APIC IRQ0→vec 0x20, tick counter verified, pit_sleep_ms() working. Phase 1.2 (APIC) also confirmed complete. Next: Phase 1.4 (VGA verification).*
+*Last updated: May 2026 — Phase 1.5/2.2 complete. Serial COM1 at 115200 baud active, kernel_panic() mirrors output to both VGA (red) and COM1 serial, #PF handler decodes CR2 + error-code bits. Heap smoke-test passes. Next: Phase 1.7 (Mouse driver) and Phase 2.2 VMM map/unmap test.*
