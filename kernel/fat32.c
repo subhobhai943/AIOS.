@@ -35,19 +35,19 @@ static uint32_t g_root_cluster= 2;   /* first cluster of root dir   */
 static uint8_t  g_spc         = 1;   /* sectors per cluster         */
 static bool     g_ready       = false;
 
-/* ─── Static I/O buffers ──────────────────────────────── */
+/* ─── Static I/O buffers ──────────────────────────────────── */
 /* One sector for BPB / FAT reads */
 static uint8_t  s_sector[512] __attribute__((aligned(512)));
 /* One cluster buffer (max 128 sectors = 64 KB) */
 static uint8_t  s_cluster_buf[128 * 512] __attribute__((aligned(512)));
 
-/* ─── Helper: read one absolute sector ────────────────────── */
+/* ─── Helper: read one absolute sector ───────────────────── */
 static int read_sector(uint64_t lba, void *buf)
 {
     return ahci_read_sectors(g_port, lba, 1, buf);
 }
 
-/* ─── Helper: memcpy (no libc) ──────────────────────────── */
+/* ─── Helper: memcpy (no libc) ───────────────────────────── */
 static void *memcpy_k(void *dst, const void *src, size_t n)
 {
     uint8_t       *d = (uint8_t *)dst;
@@ -56,7 +56,7 @@ static void *memcpy_k(void *dst, const void *src, size_t n)
     return dst;
 }
 
-/* ─── Helper: memcmp (no libc) ──────────────────────────── */
+/* ─── Helper: memcmp (no libc) ───────────────────────────── */
 static int memcmp_k(const void *a, const void *b, size_t n)
 {
     const uint8_t *p = (const uint8_t *)a;
@@ -68,14 +68,14 @@ static int memcmp_k(const void *a, const void *b, size_t n)
     return 0;
 }
 
-/* ─── Helper: to_upper ────────────────────────────────── */
+/* ─── Helper: to_upper ────────────────────────────────────── */
 static char to_upper(char c)
 {
     if (c >= 'a' && c <= 'z') return (char)(c - 32);
     return c;
 }
 
-/* ─── fat32_init ───────────────────────────────────────── */
+/* ─── fat32_init ──────────────────────────────────────────── */
 int fat32_init(int ahci_port, uint64_t partition_lba)
 {
     g_ready = false;
@@ -98,8 +98,7 @@ int fat32_init(int ahci_port, uint64_t partition_lba)
         return -1;
     }
 
-    /* 3. Confirm FAT32: root_entry_count==0, fat_size_16==0,
-     *    and fs_type should be "FAT32   " (optional but useful check) */
+    /* 3. Confirm FAT32: root_entry_count==0, fat_size_16==0 */
     if (bpb->root_entry_count != 0 || bpb->fat_size_16 != 0) {
         vga_puts_color("[FAT32] Volume is FAT12/16, not FAT32\n",
                        VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
@@ -107,13 +106,12 @@ int fat32_init(int ahci_port, uint64_t partition_lba)
     }
 
     /* 4. Derive geometry */
-    g_spc         = bpb->sectors_per_cluster;
-    g_root_cluster= bpb->root_cluster;
-    g_fat_lba     = (uint32_t)(partition_lba + bpb->reserved_sectors);
+    g_spc          = bpb->sectors_per_cluster;
+    g_root_cluster = bpb->root_cluster;
+    g_fat_lba      = (uint32_t)(partition_lba + bpb->reserved_sectors);
     uint32_t fat_sectors = (uint32_t)bpb->num_fats * bpb->fat_size_32;
-    g_data_lba    = g_fat_lba + fat_sectors;
-    /* Cluster 2 is the first data cluster, so:
-     * LBA(cluster N) = g_data_lba + (N - 2) * g_spc */
+    g_data_lba     = g_fat_lba + fat_sectors;
+    /* LBA(cluster N) = g_data_lba + (N - 2) * g_spc */
 
     g_ready = true;
 
@@ -132,7 +130,7 @@ int fat32_init(int ahci_port, uint64_t partition_lba)
     return 0;
 }
 
-/* ─── fat32_read_cluster ───────────────────────────────── */
+/* ─── fat32_read_cluster ──────────────────────────────────── */
 int fat32_read_cluster(uint32_t cluster, void *buf)
 {
     if (!g_ready || cluster < 2) return -1;
@@ -141,12 +139,12 @@ int fat32_read_cluster(uint32_t cluster, void *buf)
     return ahci_read_sectors(g_port, lba, g_spc, buf);
 }
 
-/* ─── fat32_next_cluster ──────────────────────────────── */
+/* ─── fat32_next_cluster ──────────────────────────────────── */
 uint32_t fat32_next_cluster(uint32_t cluster)
 {
     if (!g_ready) return 0;
 
-    /* Each FAT32 entry is 4 bytes.  128 entries fit in one 512-byte sector.
+    /* Each FAT32 entry is 4 bytes → 128 entries per 512-byte sector.
      * Sector offset within FAT = cluster / 128
      * Entry offset within sector = (cluster % 128) * 4            */
     uint32_t fat_sector_offset = cluster / 128u;
@@ -160,18 +158,17 @@ uint32_t fat32_next_cluster(uint32_t cluster)
     return entry & 0x0FFFFFFFu;   /* FAT32 uses only low 28 bits */
 }
 
-/* ─── fat32_find_file ─────────────────────────────────── */
+/* ─── fat32_find_file ─────────────────────────────────────── */
 int fat32_find_file(uint32_t dir_cluster,
-                   const char name83[11],
-                   uint32_t *out_cluster,
-                   uint32_t *out_size)
+                    const char name83[11],
+                    uint32_t *out_cluster,
+                    uint32_t *out_size)
 {
     if (!g_ready) return -1;
 
     uint32_t cluster = dir_cluster;
 
     while (cluster >= 2 && cluster < FAT32_EOC_MIN) {
-        /* Read all sectors of this directory cluster */
         if (fat32_read_cluster(cluster, s_cluster_buf) != 0) return -1;
 
         int entries_in_cluster = (g_spc * 512) / 32;
@@ -187,10 +184,21 @@ int fat32_find_file(uint32_t dir_cluster,
             /* Skip volume-id entries */
             if (de->attr & FAT_ATTR_VOLUME_ID) continue;
 
-            /* Compare 8.3 name (case-insensitive via upper-case) */
+            /*
+             * FIX (Bug 2): fat32_dir_entry_t has name[8] and ext[3]
+             * as SEPARATE C arrays.  Accessing de->name[j] for j > 7
+             * is undefined behaviour — the compiler may assume j < 8
+             * and optimize aggressively.
+             *
+             * Build the 11-byte comparison key by reading name[0..7]
+             * and ext[0..2] through their own array bounds, then
+             * upper-casing each byte.
+             */
             char cmp[11];
-            for (int j = 0; j < 11; j++)
-                cmp[j] = to_upper(de->name[j]);
+            for (int j = 0; j < 8; j++)
+                cmp[j]     = to_upper(de->name[j]);
+            for (int j = 0; j < 3; j++)
+                cmp[8 + j] = to_upper(de->ext[j]);
 
             if (memcmp_k(cmp, name83, 11) == 0) {
                 *out_cluster = ((uint32_t)de->first_cluster_hi << 16)
@@ -206,7 +214,7 @@ int fat32_find_file(uint32_t dir_cluster,
     return -1;   /* not found */
 }
 
-/* ─── fat32_read_file ─────────────────────────────────── */
+/* ─── fat32_read_file ─────────────────────────────────────── */
 int fat32_read_file(uint32_t first_cluster, void *buf, uint32_t max_bytes)
 {
     if (!g_ready || !buf || !max_bytes) return -1;
@@ -234,7 +242,7 @@ int fat32_read_file(uint32_t first_cluster, void *buf, uint32_t max_bytes)
     return (int)bytes_read;
 }
 
-/* ─── fat32_sector0_test ───────────────────────────────── */
+/* ─── fat32_sector0_test ──────────────────────────────────── */
 void fat32_sector0_test(void)
 {
     if (!g_ready) {
@@ -254,8 +262,8 @@ void fat32_sector0_test(void)
     klog_dec(g_root_cluster);
     klog("\r\n");
 
-    /* Try to find and read TEST.TXT in the root directory.
-     * 8.3 name: "TEST    TXT" (8 chars name + 3 chars ext, space-padded) */
+    /* Try to find TEST.TXT in root dir.
+     * 8.3 name: "TEST    TXT" (8-char name + 3-char ext, space-padded) */
     static const char test_name[11] = "TEST    TXT";
     uint32_t fc = 0, fsz = 0;
 
@@ -277,7 +285,7 @@ void fat32_sector0_test(void)
     klog_dec(fsz);
     klog("\r\n");
 
-    /* Read first 64 bytes */
+    /* Read first 64 bytes and hex-dump to serial */
     static uint8_t tbuf[512] __attribute__((aligned(512)));
     int got = fat32_read_file(fc, tbuf, 64);
     if (got <= 0) {
@@ -289,10 +297,17 @@ void fat32_sector0_test(void)
     klog("[FAT32] TEST.TXT first ");
     klog_dec((uint32_t)got);
     klog(" bytes: ");
-    static const char hex[] = "0123456789ABCDEF";
+
+    /*
+     * FIX (Bug 1): serial_write() does not exist in serial.h.
+     * The declared API is serial_putc(port, char).
+     * Emit each byte as two hex nibble chars + a space using serial_putc.
+     */
+    static const char hexchars[] = "0123456789ABCDEF";
     for (int i = 0; i < got; i++) {
-        char s[3] = { hex[tbuf[i] >> 4], hex[tbuf[i] & 0xF], ' ' };
-        serial_write(SERIAL_COM1, s, 3);
+        serial_putc(SERIAL_COM1, hexchars[tbuf[i] >> 4]);
+        serial_putc(SERIAL_COM1, hexchars[tbuf[i] & 0xF]);
+        serial_putc(SERIAL_COM1, ' ');
     }
     klog("\r\n");
 
