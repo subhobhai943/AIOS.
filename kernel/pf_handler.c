@@ -44,7 +44,7 @@ static void ser_hex(const char *label, uint64_t val)
 void pf_handler(interrupt_frame_t *frame)
 {
     uint64_t cr2   = read_cr2();
-    uint64_t ecode = frame->error_code;   /* pushed by CPU for #PF */
+    uint64_t ecode = frame->err_code;   /* pushed by CPU for #PF */
 
     /* ── VGA report ─────────────────────────────────────── */
     vga_puts_color("\n[#PF] PAGE FAULT\n",
