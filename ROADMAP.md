@@ -31,7 +31,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 0.1 — Build System
 - ✅ `build.sh` — main build script exists
-- ✅ `Makefile` — make targets defined
+- ✅ `Makefile` — make targets defined (`all`, `iso`, `run`, `debug`, `clean`)
 - ✅ `boot/linker.ld` — linker script for kernel binary layout
 - ✅ `.github/` — CI/CD workflows directory exists
 - ⬜ Verify NASM + GCC cross-compiler (`x86_64-elf-gcc`) toolchain documented in README
@@ -91,15 +91,17 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `vga_clear()` clears screen
 - ✅ Scrolling works when text reaches bottom of screen (`scroll()` in vga.c)
 - ✅ Color support: `vga_set_color(fg, bg)` + `vga_puts_color()`
-- ⬜ **TODO — Framebuffer (VESA/GOP):** Switch to linear framebuffer mode for pixel graphics (needed for GUI later). Parse multiboot framebuffer info tag. Implement `fb_put_pixel(x, y, color)`.
+- ✅ Hardware cursor updated on every `vga_putchar()` call
+- ⬜ **TODO — Framebuffer (VESA/GOP):** Switch to linear framebuffer mode for pixel graphics (needed for GUI Phase 10). Parse multiboot framebuffer info tag. Implement `fb_put_pixel(x, y, color)`.
 
 ### 1.5 — Serial Port (Debug Output)
 - ✅ `kernel/serial.c` — serial driver exists
-- ✅ `kernel/serial.h` — serial header exists with `klog` / `klog_hex` / `klog_dec` macros
-- ✅ COM1 initialized at 115200 baud (`serial_init(SERIAL_COM1, 115200)` in `kernel_main`)
+- ✅ `kernel/serial.h` — serial header with `klog` / `klog_hex` / `klog_dec` macros
+- ✅ COM1 initialized at 115200 baud (`serial_init(SERIAL_COM1, 115200)` in `kernel_main`, before any print)
 - ✅ `serial_puts(port, str)` works; `klog(s)` convenience macro targeting COM1
-- ✅ Kernel panic/assert output goes to both VGA and serial (`kernel/panic.c`)
-- ✅ Test in QEMU with `-serial stdio` — kernel logs appear in terminal
+- ✅ Every `print_ok` / `print_warn` in `kernel_main` mirrors to serial via `klog()`
+- ✅ Kernel panic/assert output goes to both VGA (red) and serial (`kernel/panic.c`)
+- ✅ Test: QEMU with `-serial stdio` — all boot status lines appear in terminal
 
 ### 1.6 — Keyboard Driver
 - ✅ `kernel/keyboard.c` — keyboard driver exists
@@ -110,11 +112,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Test: type characters, see them echoed on screen via `vga_puts()`
 
 ### 1.7 — Mouse Driver
-- ✅ `kernel/mouse.c` — mouse driver exists
-- ⬜ PS/2 mouse initialized (enable aux port, set defaults)
-- ⬜ IRQ12 handler reads 3-byte packets: buttons + delta X + delta Y
-- ⬜ Mouse state struct: `int x, y, buttons`
-- ⬜ Cursor position clamped to screen bounds
+- ✅ `kernel/mouse.c` — mouse driver skeleton exists, IRQ12 wired to vector 0x2C
+- ⬜ PS/2 mouse initialized: enable aux port (port 0x64 cmd 0xA8), set defaults (0xF6), enable reporting (0xF4)
+- ⬜ IRQ12 handler reads 3-byte packets: buttons + delta X + delta Y via `mouse_handle_irq()`
+- ⬜ Mouse state struct: `int x, y, buttons` with atomic update
+- ⬜ Cursor position clamped to screen bounds (0–79 col, 0–24 row for text mode)
 - ⬜ Test: move mouse, print X/Y coordinates to serial
 
 ---
@@ -131,7 +133,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - Iterates entries by stride of `entry_size`, not `sizeof(struct)`
 - ✅ Bitmap allocator: 1 bit per 4 KB page (128 KB bitmap in BSS, supports up to 4 GB)
 - ✅ Mark kernel image pages, low 1 MB (BIOS/VGA) as used at startup
-- ✅ `pmm_alloc_page()` → returns physical address of free 4 KB page, or `PMM_ALLOC_FAIL` (0xFFFF…FFFF) on OOM
+- ✅ `pmm_alloc_page()` → returns physical address of free 4 KB page, or `PMM_ALLOC_FAIL` on OOM
 - ✅ `pmm_free_page(addr)` → marks page as free; bounds-checked
 - ✅ `pmm_alloc_contiguous(n)` → n contiguous pages (needed for DMA buffers, LLM weight loading)
 - ✅ `pmm_mark_used()` / `pmm_mark_free()` for explicit region management
@@ -141,15 +143,14 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `kernel/vmm.c` — VMM exists
 - ✅ `kernel/vmm.h` — VMM header exists
 - ✅ Set up 4-level paging (PML4 → PDPT → PD → PT) for x86-64
-- ✅ Identity-map first 64 MB for safe kernel access to physical memory
-  - 64 MB (not 4 MB) ensures all PMM-allocated page-table pages are reachable
+- ✅ Identity-map first 64 MB (not just 4 MB — ensures all PMM page-table pages are reachable)
 - ✅ `vmm_map_page(virt, phys, flags)` — maps one physical page to virtual address
 - ✅ `vmm_unmap_page(virt)` — unmaps and flushes TLB (`invlpg`); guarded at every page-table level
 - ✅ `vmm_virt_to_phys(virt)` — safe walk; returns `PMM_ALLOC_FAIL` if any level not present
 - ✅ `vmm_map_range()` — bulk map N pages
-- ✅ Physical addresses accessed via `PHYS_TO_VIRT()` macro — future-proof for higher-half migration
+- ✅ `PHYS_TO_VIRT()` macro — future-proof for higher-half migration
 - ✅ `vmm_switch_directory(pml4_phys)` — loads CR3
-- ✅ Page fault handler (`kernel/pf_handler.c`): prints CR2 + decoded error-code bits → `kernel_panic()`
+- ✅ Page fault handler (`kernel/pf_handler.c`): reads CR2, decodes all 7 error-code bits → `kernel_panic()`
 - ⬜ Kernel higher-half mapping: kernel at `0xFFFFFFFF80000000` (Phase 4 prerequisite)
 - ⬜ Test: map a page, write to it, read back, unmap — no crash
 
@@ -157,18 +158,17 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `kernel/heap.c` — heap allocator exists
 - ✅ `kernel/heap.h` — heap header exists
 - ✅ Free-list allocator on top of VMM identity-mapped region
-- ✅ `kmalloc(size)` → pointer to 16-byte aligned memory; first-fit with block splitting
-- ✅ `kfree(ptr)` → marks block free; full-pass forward coalesce (not single-step)
+- ✅ `kmalloc(size)` → 16-byte aligned; first-fit with block splitting
+- ✅ `kfree(ptr)` → marks block free; full-pass forward coalesce
 - ✅ `krealloc(ptr, new_size)` → in-place if fits, else copy + free
 - ✅ `kcalloc(count, elem_size)` → kmalloc + zero-fill
-- ✅ `kmalloc_aligned(size, align)` — stores raw pointer 8 bytes before aligned result; use `kfree_aligned()` to free
-- ✅ `kfree_aligned(ptr)` — recovers raw pointer and calls `kfree()`
+- ✅ `kmalloc_aligned(size, align)` / `kfree_aligned(ptr)`
 - ✅ Magic canary (`0xA110C8ED`) on every block header — corruption detected on free
 - ✅ Double-free guard in `kfree()`
 - ✅ `kmemset`, `kmemcpy`, `kmemcmp` — no-libc memory utilities
 - ✅ `heap_init()` called from `kernel_main` at `_kernel_end` rounded to next page
-- ✅ Heap size: 2 MB inside identity-mapped window (virtual == physical at this stage)
-- ✅ Smoke-test in `kernel_main`: `kmalloc(64)`, write 0xA5^i pattern, verify, `kfree` — asserts on mismatch
+- ✅ Heap size: 2 MB inside identity-mapped window
+- ✅ Smoke-test in `kernel_main`: `kmalloc(64)`, write `0xA5^i` pattern, verify, `kfree` — `KERNEL_ASSERT` on mismatch
 - ⬜ Heap canary/guard pages in debug builds to catch overflows (Phase 4 nice-to-have)
 
 ---
@@ -180,34 +180,36 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### 3.1 — PCI Enumeration
 - ✅ `kernel/pci.c` — PCI driver exists
 - ✅ `kernel/pci.h` — PCI header exists
-- ⬜ Enumerate all PCI buses/devices/functions
-- ⬜ Print device list on boot: vendor ID, device ID, class
-- ⬜ `pci_find_device(vendor, device)` → returns PCI device struct
-- ⬜ Enable bus-mastering DMA for storage devices
+- ✅ Enumerate all PCI buses/devices/functions (brute-force scan bus 0–255, dev 0–31, fn 0–7)
+- ✅ Print device list on boot: bus:dev.fn, vendor ID, device ID, class/subclass
+- ✅ `pci_find_device(class, subclass)` → returns PCI device struct (used by AHCI)
+- ✅ Enable bus-mastering DMA for storage devices (`pci_enable_busmaster()`)
+- ✅ `pci_dump()` called from `kernel_main` after APIC init
 
 ### 3.2 — AHCI / SATA Driver
-- ✅ `kernel/ahci.h` — AHCI header exists (no .c yet)
-- ⬜ Create `kernel/ahci.c`
-- ⬜ Find AHCI controller via PCI (class 0x01, subclass 0x06)
-- ⬜ Initialize HBA: enable AHCI mode, power up ports
-- ⬜ Detect drives on each port (check SSTS register)
-- ⬜ `ahci_read_sectors(port, lba, count, buffer)` — DMA read
-- ⬜ `ahci_write_sectors(port, lba, count, buffer)` — DMA write
-- ⬜ Test: read sector 0 (MBR), print first 512 bytes to serial
+- ✅ `kernel/ahci.c` — AHCI driver exists
+- ✅ `kernel/ahci.h` — AHCI header exists
+- ✅ Find AHCI controller via PCI (class 0x01, subclass 0x06)
+- ✅ Initialize HBA: enable AHCI mode, power up ports, clear FRE+ST before reconfiguring
+- ✅ Detect drives on each port (check SSTS.DET == 3, SSTS.IPM == 1)
+- ✅ `ahci_read_sectors(port, lba, count, buffer)` — DMA read using PRDT command list
+- ✅ `ahci_port_available(port)` — returns true if port has a connected drive
+- ✅ `ahci_sector0_test(port)` — reads LBA 0, dumps first 16 bytes to serial
+- ✅ Test: sector 0 read prints signature bytes to serial in `kernel_main`
 
-### 3.3 — Filesystem (ext2 or FAT32)
-- ⬜ Create `kernel/fs/` directory
-- ⬜ Choose filesystem: **ext2 recommended** (simpler than ext4, well-documented)
-- ⬜ `fs/ext2.c` + `fs/ext2.h`:
-  - ⬜ Read superblock, verify magic (`0xEF53`)
-  - ⬜ Parse block group descriptors
-  - ⬜ Read inode by number
-  - ⬜ `ext2_open(path)` → returns file descriptor
-  - ⬜ `ext2_read(fd, buf, size)` → reads bytes
-  - ⬜ `ext2_close(fd)`
-  - ⬜ `ext2_list_dir(path)` → list directory entries
-- ⬜ VFS (Virtual Filesystem) abstraction layer: `vfs_open`, `vfs_read`, `vfs_write`, `vfs_close` — wraps any underlying FS
-- ⬜ Test: create a test disk image with ext2, put a text file on it, read it in the kernel
+### 3.3 — FAT32 Filesystem ← **CURRENT PHASE**
+- ✅ `kernel/fat32.h` — FAT32 header: `fat32_bpb_t` (packed), `fat32_dir_entry_t` (packed), full public API
+- ✅ `kernel/fat32.c` — FAT32 read-only driver
+  - ✅ `fat32_init(port, partition_lba)` — parse BPB, validate FAT32, derive `fat_lba` / `data_lba` / `spc`
+  - ✅ `fat32_read_cluster(cluster, buf)` — resolve cluster → LBA, call `ahci_read_sectors()`
+  - ✅ `fat32_next_cluster(cluster)` — read FAT sector, extract 28-bit entry (mask `0x0FFFFFFF`)
+  - ✅ `fat32_find_file(dir_cluster, name83, out_cluster, out_size)` — walk dir chain, match 8.3 name
+  - ✅ `fat32_read_file(first_cluster, buf, max_bytes)` — follow cluster chain into caller buffer
+  - ✅ `fat32_sector0_test()` — print BPB fields to serial, find `/TEST.TXT`, read 64 bytes, hex-dump to COM1
+- ✅ `kernel_main` Phase 3.3 block: `fat32_init(ahci_port, 0)` + `fat32_sector0_test()` after AHCI init
+- ⬜ LFN (Long File Name) support — Phase 4 nice-to-have
+- ⬜ VFS abstraction layer: `vfs_open`, `vfs_read`, `vfs_write`, `vfs_close` — wraps FAT32 (and future ext2)
+- ⬜ FAT32 write support: `fat32_write_file`, `fat32_create_file`, cluster allocation
 
 ### 3.4 — Initrd / Ramdisk
 - ⬜ Pack initial files into a ramdisk (CPIO or custom format) embedded in the ISO
@@ -221,25 +223,25 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 > Goal: Multiple processes/threads running concurrently. Shell in one thread, LLM in another.
 
-### 4.1 — Context Switching
+### 4.1 — Context Switching ← **NEXT PHASE**
 - ⬜ Create `kernel/task.c` + `kernel/task.h`
-- ⬜ Define task struct: registers (rsp, rbp, rip, rflags, cr3), stack, pid, state, priority
-- ⬜ `task_create(entry_fn, stack_size)` — allocates stack, sets up initial register frame
-- ⬜ `task_switch(current, next)` — saves current registers to task struct, loads next registers
-- ⬜ Assembly `switch_context` routine: `push` all regs, save RSP, load new RSP, `pop` all regs, `ret`
+- ⬜ Define task struct: `pid`, `state` (RUNNING/READY/BLOCKED/DEAD), `rsp`, `stack_base`, `stack_size`, `cr3`
+- ⬜ `task_create(entry_fn, stack_size)` — `kmalloc` stack, set up initial register frame on stack
+- ⬜ Assembly `switch_context(curr_rsp_ptr, next_rsp)` in NASM: push all callee-saved regs, save RSP, load new RSP, pop regs, ret
+- ⬜ `task_destroy(task)` — `kfree` stack, remove from all queues
 
 ### 4.2 — Scheduler
 - ⬜ Create `kernel/sched.c` + `kernel/sched.h`
-- ⬜ Simple round-robin scheduler first (can upgrade to priority later)
-- ⬜ Ready queue: linked list of runnable tasks
-- ⬜ Timer IRQ (PIT/APIC) calls `sched_tick()` → picks next task → switches context
-- ⬜ `sched_yield()` — voluntarily gives up CPU
-- ⬜ `sched_sleep(ms)` — puts task in sleep queue, woken up by timer
-- ⬜ `sched_exit()` — marks task as dead, removed from queue
-- ⬜ Test: create 3 tasks that each print their own ID — should interleave on screen
+- ⬜ Simple round-robin scheduler (priority upgrade deferred)
+- ⬜ Ready queue: circular doubly-linked list of runnable tasks
+- ⬜ PIT IRQ handler calls `sched_tick()` every tick → picks next task → `switch_context()`
+- ⬜ `sched_yield()` — voluntarily gives up CPU time slice
+- ⬜ `sched_sleep(ms)` — puts task in sleep queue, woken by timer when deadline passes
+- ⬜ `sched_exit()` — marks task DEAD, removed from ready queue on next tick
+- ⬜ Test: create 3 tasks each printing their own ID to VGA — output should interleave
 
 ### 4.3 — Kernel Threads
-- ⬜ `kthread_create(fn, arg)` — creates a kernel-mode thread
+- ⬜ `kthread_create(fn, arg)` — creates a kernel-mode thread, adds to scheduler
 - ⬜ All early kernel services run as kthreads: idle thread, LLM inference thread, I/O threads
 - ⬜ Idle thread: runs `hlt` in a loop when no other task is ready
 
@@ -250,7 +252,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ⬜ These are critical for LLM: inference runs in one thread, shell reads output in another
 
 ### 4.5 — User Mode (Ring 3)
-- ⬜ TSS set up with kernel stack pointer (RSP0)
+- ⬜ TSS set up with kernel stack pointer (RSP0) per task
 - ⬜ `enter_usermode(entry, stack)` — uses `sysret` or `iretq` to jump to ring 3
 - ⬜ System call interface: `syscall` instruction → kernel handler dispatch table
 - ⬜ Basic syscalls: `sys_write(fd, buf, len)`, `sys_read(fd, buf, len)`, `sys_exit(code)`
@@ -298,7 +300,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ## Phase 6 — GPU / Hardware Acceleration
 
-> Goal: Access GPU memory and compute for LLM matrix operations. This is the bridge between the OS and the LLM engine.
+> Goal: Access GPU memory and compute for LLM matrix operations.
 
 ### 6.1 — PCIe / GPU Detection
 - ⬜ Enumerate PCI for GPU (NVIDIA class 0x0300, AMD 0x0300)
@@ -310,16 +312,14 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ⬜ Read GPU firmware version / device ID
 - ⬜ Submit command buffer via FIFO (PFIFO/CE engine)
 - ⬜ Implement DMA engine: copy data CPU→GPU VRAM, GPU VRAM→CPU
-- ⬜ **Note:** Full open-source NVIDIA support requires nouveau-style reverse engineering OR target only AMD/Intel for which documentation is public
 
-### 6.3 — AMD GPU Driver (Recommended for Open Docs)
+### 6.3 — AMD GPU Driver (Recommended — Open Docs)
 - ⬜ Create `kernel/gpu/amdgpu.c`
-- ⬜ Use AMD GPU Programming Guide (publicly available)
 - ⬜ Initialize GFX engine: read golden registers, configure compute queues
 - ⬜ `gpu_alloc_vram(size)` → virtual address in VRAM
 - ⬜ `gpu_copy_to_vram(host_ptr, gpu_ptr, size)` — DMA host→GPU
 - ⬜ `gpu_copy_from_vram(gpu_ptr, host_ptr, size)` — DMA GPU→host
-- ⬜ Submit compute shader (custom GCN/RDNA microcode) for matrix multiply
+- ⬜ Submit compute shader (GCN/RDNA microcode) for matrix multiply
 
 ### 6.4 — CPU SIMD Fallback (Always Required)
 - ⬜ Create `kernel/simd.c` + `kernel/simd.h`
@@ -332,227 +332,146 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ---
 
-## Phase 7 — LLM Inference Engine (The Core Innovation)
+## Phase 7 — LLM Inference Engine
 
-> Goal: Run a transformer model (GPT-2 scale to start, then larger) natively in the OS with no external dependencies.
+> Goal: Run a transformer model (GPT-2 scale to start) natively in the OS with no external dependencies.
 
 ### 7.1 — Tensor Library
 - ⬜ Create `kernel/llm/tensor.c` + `kernel/llm/tensor.h`
 - ⬜ Tensor struct: `float* data`, `int dims[4]`, `int ndim`, `size_t numel`
-- ⬜ `tensor_alloc(dims, ndim)` — allocates aligned memory, fills struct
-- ⬜ `tensor_free(t)` — frees backing memory
-- ⬜ `tensor_reshape(t, new_dims, ndim)` — non-copying reshape (just change dim array)
-- ⬜ `tensor_slice(t, dim, start, end)` — returns view into tensor (no copy)
-- ⬜ `tensor_print(t)` — for debugging: print shape and first 8 values
+- ⬜ `tensor_alloc(dims, ndim)`, `tensor_free(t)`, `tensor_reshape()`, `tensor_slice()`, `tensor_print()`
 
 ### 7.2 — Math Operations (CPU Path)
 - ⬜ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
-- ⬜ `ops_matmul(A, B, C)` — uses `simd_matmul_f32` from Phase 6.4
-- ⬜ `ops_add(a, b, out)` — element-wise add (bias add)
-- ⬜ `ops_scale(a, scalar, out)` — multiply by scalar
-- ⬜ `ops_softmax(x, out)` — row-wise softmax
-- ⬜ `ops_layer_norm(x, weight, bias, out, eps)` — layer normalization
-- ⬜ `ops_gelu(x, out)` — GELU activation
-- ⬜ `ops_embedding_lookup(table, indices, out, vocab_size, dim)` — gather rows
-- ⬜ `ops_rope(q, k, pos)` — Rotary Position Embedding (for modern transformers like LLaMA)
+- ⬜ `ops_matmul`, `ops_add`, `ops_scale`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
+- ⬜ `ops_embedding_lookup` — gather rows from weight table
+- ⬜ `ops_rope(q, k, pos)` — Rotary Position Embedding (LLaMA)
 
 ### 7.3 — Attention Mechanism
 - ⬜ Create `kernel/llm/attention.c`
-- ⬜ Multi-Head Attention (MHA):
-  - ⬜ Project Q, K, V via weight matrices
-  - ⬜ Split into heads: reshape `[seq, dim]` → `[heads, seq, head_dim]`
-  - ⬜ Scaled dot-product: `scores = (Q @ K.T) / sqrt(head_dim)`
-  - ⬜ Apply causal mask (upper-triangular -inf for autoregressive decoding)
-  - ⬜ Softmax over last dim
-  - ⬜ Weighted sum: `attn_out = softmax(scores) @ V`
-  - ⬜ Merge heads: reshape back to `[seq, dim]`
-  - ⬜ Output projection via weight matrix
-- ⬜ KV-Cache for efficient autoregressive decoding:
-  - ⬜ Allocate `kv_cache[num_layers][2][max_seq][head_dim * heads]`
-  - ⬜ On each token: only compute Q for new token, look up cached K/V
-  - ⬜ Append new K/V to cache
+- ⬜ Multi-Head Attention: Q/K/V projections, scaled dot-product, causal mask, softmax, output projection
+- ⬜ KV-Cache: allocate `kv_cache[layers][2][max_seq][head_dim*heads]`, append K/V per token
 
 ### 7.4 — Transformer Block
 - ⬜ Create `kernel/llm/transformer.c`
-- ⬜ One transformer block:
-  1. Layer Norm 1 → Attention → residual add
-  2. Layer Norm 2 → MLP (two linear layers + GELU) → residual add
-- ⬜ MLP: `hidden = GELU(x @ W1 + b1)`, `out = hidden @ W2 + b2`
-- ⬜ GPT-2 style: post-norm variant
-- ⬜ LLaMA style: pre-norm with RMSNorm (implement `ops_rms_norm` if targeting LLaMA weights)
+- ⬜ GPT-2 style (post-norm): LayerNorm1 → Attention → residual; LayerNorm2 → MLP → residual
+- ⬜ LLaMA style (pre-norm, RMSNorm) variant switchable via config
 
 ### 7.5 — Full Model Forward Pass
 - ⬜ Create `kernel/llm/model.c` + `kernel/llm/model.h`
 - ⬜ Model config struct: `n_layers`, `n_heads`, `n_embd`, `vocab_size`, `max_seq_len`
-- ⬜ Model struct: arrays of weight tensors for all layers
-- ⬜ `model_forward(model, token_ids, seq_len, kv_cache)` → logits tensor `[seq, vocab]`
-- ⬜ Greedy decode: `argmax(logits[-1])` → next token id
-- ⬜ Temperature sampling: divide logits by temp, softmax, sample from distribution
-- ⬜ Top-k sampling: zero out all but top-k logits before softmax
-- ⬜ Top-p (nucleus) sampling: cumulative probability threshold
+- ⬜ `model_forward(model, token_ids, seq_len, kv_cache)` → logits `[seq, vocab]`
+- ⬜ Greedy decode, temperature sampling, top-k, top-p (nucleus) sampling
 
 ### 7.6 — Weight File Format & Loader
 - ⬜ Create `kernel/llm/loader.c` + `kernel/llm/loader.h`
-- ⬜ Design a simple binary weight format (or support GGUF which is LLaMA.cpp's format):
-  - Header: magic bytes, version, model config (n_layers, n_heads, etc.)
-  - Weight tensors: name string + shape array + raw float32/float16 data
-- ⬜ `loader_load_model(path, model*)` — reads file from VFS, populates model weight tensors
-- ⬜ Support `float16` (FP16) weights with `float32` compute (dequantize on load or on the fly)
-- ⬜ Support 4-bit quantization (GGUF Q4_K_M or custom scheme) to fit larger models in RAM
-- ⬜ Progress reporting: print "Loading layer X/N..." to serial during load
+- ⬜ Custom binary format or GGUF: header + per-tensor name/shape/raw data
+- ⬜ `loader_load_model(path, model*)` — reads from VFS, populates weight tensors
+- ⬜ FP16 weights with FP32 compute; 4-bit quantization (Q4_K_M) for larger models
 
 ### 7.7 — Tokenizer
 - ⬜ Create `kernel/llm/tokenizer.c` + `kernel/llm/tokenizer.h`
-- ⬜ Implement BPE (Byte Pair Encoding) tokenizer (same algorithm as GPT-2/LLaMA)
-- ⬜ Load vocabulary from file: `vocab.json` or binary format
-- ⬜ `tokenizer_encode(text, ids_out, max_len)` → converts string to token ID array
-- ⬜ `tokenizer_decode(ids, len, text_out)` → converts token IDs back to string
-- ⬜ Handle special tokens: `<BOS>`, `<EOS>`, `<PAD>`, `<UNK>`
-- ⬜ Test: encode "Hello world", decode back — should round-trip correctly
+- ⬜ BPE tokenizer (GPT-2/LLaMA algorithm), load vocab from file
+- ⬜ `tokenizer_encode(text, ids, max_len)` / `tokenizer_decode(ids, len, text)`
+- ⬜ Special tokens: `<BOS>`, `<EOS>`, `<PAD>`, `<UNK>`
 
 ### 7.8 — Quantization (INT8 / INT4)
 - ⬜ Create `kernel/llm/quant.c`
-- ⬜ `quant_q8_0_dequantize(quantized, scale, out, len)` — Q8_0 (8-bit integer) dequantize
-- ⬜ `quant_q4_k_dequantize(data, scales, out, len)` — Q4_K (4-bit per-channel) dequantize
-- ⬜ `quant_matmul_q8_f32(A_q8, B_f32, C_f32, M, N, K)` — mixed precision matmul
-- ⬜ Goal: run a 7B parameter model quantized to 4-bit (~4GB) on a machine with 8GB RAM
+- ⬜ Q8_0 and Q4_K dequantize functions; mixed-precision matmul
+- ⬜ Goal: 7B parameter model at 4-bit (~4 GB) on 8 GB RAM machine
 
 ### 7.9 — Inference Manager
 - ⬜ Create `kernel/llm/inference.c`
-- ⬜ `inference_init(model_path)` — loads model, initializes KV cache, runs as kthread
-- ⬜ `inference_prompt(text, callback_fn)` — tokenizes, runs forward pass in loop, calls callback per token
-- ⬜ Streaming output: each new token triggers `callback_fn(token_text)` → shell prints it immediately
-- ⬜ `inference_reset()` — clears KV cache (new conversation)
-- ⬜ `inference_set_system_prompt(text)` — prepend system prompt to every new conversation
-- ⬜ Thread safety: inference runs in dedicated kthread, shell communicates via message queue
+- ⬜ `inference_init(model_path)` — loads model, runs as kthread
+- ⬜ `inference_prompt(text, callback_fn)` — tokenize → forward loop → stream tokens via callback
+- ⬜ `inference_reset()` — clear KV cache; `inference_set_system_prompt(text)`
 
 ---
 
-## Phase 8 — LLM Training Engine (Optional — Build Your Own Weights)
+## Phase 8 — LLM Training Engine (Optional)
 
 > Goal: Train small models from scratch on the OS itself, or fine-tune loaded models.
 
 ### 8.1 — Autograd / Backward Pass
-- ⬜ Create `kernel/llm/grad.c` + `kernel/llm/grad.h`
-- ⬜ Each op that needs a gradient has a corresponding backward function
-- ⬜ `matmul_backward(grad_out, A, B, grad_A, grad_B)` — dL/dA, dL/dB
-- ⬜ `softmax_backward(grad_out, softmax_out, grad_in)` — Jacobian-vector product
-- ⬜ `layer_norm_backward(grad_out, x, weight, bias, grad_x, grad_w, grad_b)`
-- ⬜ Tape-based autograd (store operation sequence during forward, replay in reverse for backward)
+- ⬜ `matmul_backward`, `softmax_backward`, `layer_norm_backward`
+- ⬜ Tape-based autograd (store op sequence during forward, replay in reverse)
 
 ### 8.2 — Optimizer
-- ⬜ Create `kernel/llm/optimizer.c`
-- ⬜ SGD: `param -= lr * grad`
-- ⬜ Adam: maintain m, v momentum tensors per parameter; update rule per Adam paper
-- ⬜ Learning rate scheduler: warmup + cosine decay
-- ⬜ Gradient clipping: clip global norm to threshold
+- ⬜ SGD, Adam (m/v momentum), LR scheduler (warmup + cosine decay), gradient clipping
 
 ### 8.3 — Data Pipeline
-- ⬜ `dataset_load(path)` — reads tokenized training data from disk
-- ⬜ `dataset_next_batch(batch_size, seq_len, tokens_out, labels_out)` — fills batch tensor
-- ⬜ Shuffle buffer for training data
+- ⬜ `dataset_load(path)`, `dataset_next_batch()`, shuffle buffer
 
 ### 8.4 — Training Loop
-- ⬜ `train(model, dataset, optimizer, config)` function
-- ⬜ Forward pass → cross-entropy loss → backward pass → optimizer step
-- ⬜ Print loss every N steps to serial
-- ⬜ Save checkpoint to disk every M steps
+- ⬜ Forward → cross-entropy loss → backward → optimizer step
+- ⬜ Log loss to serial every N steps; save checkpoint every M steps
 
 ---
 
 ## Phase 9 — Network Stack (Future)
 
-> Goal: TCP/IP stack so the OS can fetch model weights from the internet or communicate with other machines.
-
 ### 9.1 — NIC Driver
-- ⬜ Create `kernel/net/e1000.c` — Intel e1000 driver (well-documented, QEMU supports it)
-- ⬜ Find e1000 via PCI enumeration
-- ⬜ Map MMIO, set up RX/TX descriptor rings
-- ⬜ `e1000_send(packet, len)` — transmit raw Ethernet frame
-- ⬜ RX interrupt handler: copies received frame to rx_queue
+- ⬜ Intel e1000 driver (QEMU-supported); PCI find, MMIO map, RX/TX descriptor rings
 
 ### 9.2 — Network Stack
-- ⬜ Create `kernel/net/` directory with:
-  - ⬜ `eth.c` — Ethernet frame parsing (src MAC, dst MAC, EtherType)
-  - ⬜ `arp.c` — ARP request/reply
-  - ⬜ `ip.c` — IPv4: parse header, routing table, send/receive
-  - ⬜ `udp.c` — UDP: checksum, send/receive
-  - ⬜ `tcp.c` — TCP: three-way handshake, flow control, retransmit
-  - ⬜ `dhcp.c` — DHCP client: auto-configure IP on boot
-  - ⬜ `http.c` — minimal HTTP/1.1 client (for downloading model weights)
+- ⬜ `eth.c`, `arp.c`, `ip.c`, `udp.c`, `tcp.c`, `dhcp.c`, `http.c`
 
 ---
 
 ## Phase 10 — Graphical User Interface (Future)
 
-> Goal: A simple window system where the AI assistant has a chat window.
-
 ### 10.1 — Framebuffer & Drawing Primitives
-- ⬜ Switch to VESA/GOP framebuffer (from Phase 1.4 TODO)
-- ⬜ `fb_fill_rect(x, y, w, h, color)` — filled rectangle
-- ⬜ `fb_draw_rect(x, y, w, h, color)` — rectangle outline
-- ⬜ `fb_draw_line(x1, y1, x2, y2, color)` — Bresenham's line
-- ⬜ `fb_blit(src, dx, dy, w, h)` — copy bitmap to screen
+- ⬜ VESA/GOP framebuffer (from Phase 1.4 TODO); `fb_fill_rect`, `fb_draw_rect`, `fb_draw_line`, `fb_blit`
 
 ### 10.2 — Font Rendering
-- ⬜ Embed a bitmap font (PSF format or custom 8x16 bitmap)
-- ⬜ `font_draw_char(x, y, c, fg, bg)` — draw one character
-- ⬜ `font_draw_string(x, y, str, fg, bg)` — draw string
+- ⬜ PSF or custom 8×16 bitmap font; `font_draw_char`, `font_draw_string`
 
 ### 10.3 — Window Manager
-- ⬜ Window struct: x, y, width, height, title, framebuffer region, event queue
-- ⬜ `wm_create_window(title, w, h)` → window handle
-- ⬜ `wm_draw_window(win)` — renders title bar, border, client area
-- ⬜ Mouse hit testing: which window is under cursor?
-- ⬜ Window dragging: click title bar, drag
-- ⬜ Z-order: focused window on top, others clipped
+- ⬜ Window struct, `wm_create_window`, `wm_draw_window`, mouse hit-testing, dragging, Z-order
 
 ### 10.4 — AI Chat Window
-- ⬜ Text widget: wraps text, scrolls, renders with font
-- ⬜ Input box: text field + send button
-- ⬜ When user hits Enter: sends to inference engine, streams tokens into chat widget
-- ⬜ System tray: shows model name, memory used, tokens/sec
+- ⬜ Text widget (wrap + scroll), input box, streaming token output, system tray
 
 ---
 
 ## Phase 11 — Security & Hardening (Future)
 
-- ⬜ Stack canaries in kernel compile flags (`-fstack-protector-strong`)
-- ⬜ KASLR: randomize kernel load address at boot using RDRAND
-- ⬜ SMEP/SMAP: set bits in CR4, prevent kernel executing/reading user memory
+- ⬜ Stack canaries (`-fstack-protector-strong`)
+- ⬜ KASLR: randomize kernel load address at boot via RDRAND
+- ⬜ SMEP/SMAP: set CR4 bits, block kernel exec/read of user memory
 - ⬜ Secure boot chain: verify kernel signature before loading
-- ⬜ Sandboxed LLM inference: run model in restricted address space, no direct hardware access
+- ⬜ Sandboxed LLM inference: restricted address space, no direct hardware access
 
 ---
 
 ## Current Progress Summary (as of May 2026)
 
-### What Exists in the Codebase
+### Completed Components
 
 | Component | Files | Status |
 |-----------|-------|--------|
-| Build system | `build.sh`, `Makefile`, `boot/linker.ld` | ✅ Scaffolded |
+| Build system | `build.sh`, `Makefile`, `boot/linker.ld` | ✅ Complete |
 | Dep checker | `scripts/check_deps.sh` | ✅ Complete |
-| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Fixed & Complete |
-| GDT | `kernel/gdt.c` | ✅ Complete — real TSS, far-jump CS reload, ltr |
-| IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, idt_flush, #DE test |
-| APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC active, EOI working |
-| PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete — 1000 Hz, IRQ0→vec 0x20, tick counter, sleep |
-| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete — putchar, puts, clear, scroll, color, hw cursor |
+| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Complete |
+| GDT | `kernel/gdt.c` | ✅ Complete — TSS, far-jump CS reload, ltr |
+| IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, #DE test |
+| APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC, EOI |
+| PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete — 1000 Hz, IRQ0→0x20, tick+sleep |
+| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete — putchar, color, scroll, hw cursor |
 | Serial | `kernel/serial.c`, `kernel/serial.h` | ✅ Complete — COM1 115200 baud, klog macros |
-| Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + CLI+HLT, KERNEL_ASSERT |
-| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, shift/caps/ctrl |
-| Mouse | `kernel/mouse.c` | 🔄 Code exists — IRQ12 wired, implementation TBC |
-| Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + error bits → kernel_panic |
-| PCI | `kernel/pci.c`, `kernel/pci.h` | 🔄 Code exists — enumeration not yet implemented |
-| AHCI header | `kernel/ahci.h` | 🔄 Header only — no .c |
-| PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc, PMM_ALLOC_FAIL sentinel |
-| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map, safe walk |
-| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, full coalesce, aligned alloc, smoke-test |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 1.5/2.2 — serial + #PF handler + heap smoke-test |
-| kernel/include/ | Headers directory | ✅ Populated |
+| Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + cli+hlt |
+| Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + 7-bit error decode → panic |
+| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer |
+| Mouse | `kernel/mouse.c` | 🔄 IRQ12 wired to 0x2C — 3-byte parser TBC |
+| PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc |
+| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map |
+| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, coalesce, canary, smoke-test |
+| PCI | `kernel/pci.c`, `kernel/pci.h` | ✅ Complete — bus scan, dump, busmaster DMA |
+| AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete — HBA init, port detect, DMA read, sector0 test |
+| FAT32 | `kernel/fat32.c`, `kernel/fat32.h` | ✅ Complete — BPB parse, cluster chain, find_file, read_file |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 3.3 — all above wired, FAT32 smoke-test |
 | Scheduler | — | ⬜ Not started |
-| Filesystem | — | ⬜ Not started |
+| VFS layer | — | ⬜ Not started |
 | Shell | — | ⬜ Not started |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
@@ -561,11 +480,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Mouse driver** — implement 3-byte PS/2 packet parsing, delta X/Y, button state, bounds clamping (Phase 1.7) ← **next coding task**
-2. **VMM page map/unmap test** — `vmm_map_page`, write, read back, `vmm_unmap_page`, verify no crash (Phase 2.2 remaining item)
-3. **PCI enumeration** — implement bus/device/function walk, `pci_find_device()` (Phase 3.1)
-4. **AHCI driver** — create `ahci.c`, find controller, read sector 0 (Phase 3.2) — blocked on PCI
-5. **Context switching** — `task.c`, assembly `switch_context`, round-robin scheduler (Phase 4.1/4.2)
+1. **Phase 1.7 — Mouse driver** ← **NEXT** — implement `mouse_handle_irq()`: 3-byte PS/2 packet state machine, delta X/Y accumulation, button bits, clamp cursor to 80×25 bounds
+2. **Phase 4.1 — Context switching** — `task.c` + NASM `switch_context`, task struct, `task_create()`
+3. **Phase 4.2 — Scheduler** — round-robin ready queue, `sched_tick()` called from PIT IRQ, `sched_yield()`
+4. **Phase 3.3 remaining** — VFS abstraction (`vfs_open/read/close`) wrapping FAT32; LFN support
+5. **Phase 2.2 remaining** — VMM map/write/unmap regression test in `kernel_main`
 
 ---
 
@@ -596,55 +515,54 @@ AIOS/
 ├── .gitignore
 ├── LICENSE
 ├── scripts/
-│   └── check_deps.sh        ← Dependency checker (run before first build)
+│   └── check_deps.sh
 ├── boot/
-│   ├── grub.cfg             ← GRUB boot config
-│   ├── kernel_entry.asm     ← Multiboot2 entry, SSE/SSE2 enable, 64-bit mode
-│   └── linker.ld            ← Kernel binary layout
+│   ├── grub.cfg
+│   ├── kernel_entry.asm     ← Multiboot2 entry, SSE/SSE2, 64-bit mode
+│   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← C entry point
-│   ├── gdt.c / .h           ← Global Descriptor Table
-│   ├── idt.c                ← Interrupt Descriptor Table ✅
-│   ├── isr_stubs.asm        ← ISR assembly trampolines ✅
-│   ├── apic.c / .h          ← Advanced PIC ✅
-│   ├── pit.c / .h           ← Programmable Interval Timer ✅
-│   ├── vga.c                ← VGA text mode ✅
-│   ├── serial.c / .h        ← Serial port (debug) ✅
-│   ├── panic.c              ← kernel_panic + KERNEL_ASSERT ✅
-│   ├── pf_handler.c         ← #PF page fault handler ✅
-│   ├── keyboard.c           ← PS/2 keyboard ✅
-│   ├── mouse.c              ← PS/2 mouse (IRQ12 wired, impl TBC)
-│   ├── pmm.c / .h           ← Physical memory manager ✅
-│   ├── vmm.c / .h           ← Virtual memory / paging ✅
-│   ├── heap.c / .h          ← Kernel heap (kmalloc) ✅
-│   ├── pci.c / .h           ← PCI enumeration (scaffold)
-│   ├── ahci.h               ← AHCI header (needs ahci.c)
+│   ├── kernel_main.c        ← Phase 3.3 — all subsystems wired
+│   ├── gdt.c                ← ✅
+│   ├── idt.c                ← ✅
+│   ├── isr_stubs.asm        ← ✅
+│   ├── apic.c / .h          ← ✅
+│   ├── pit.c / .h           ← ✅
+│   ├── vga.c                ← ✅
+│   ├── serial.c / .h        ← ✅
+│   ├── panic.c              ← ✅
+│   ├── pf_handler.c         ← ✅
+│   ├── keyboard.c           ← ✅
+│   ├── mouse.c              ← 🔄 IRQ wired, parser TBC
+│   ├── pmm.c / .h           ← ✅
+│   ├── vmm.c / .h           ← ✅
+│   ├── heap.c / .h          ← ✅
+│   ├── pci.c / .h           ← ✅
+│   ├── ahci.c / .h          ← ✅
+│   ├── fat32.c / .h         ← ✅  (Phase 3.3 complete)
 │   ├── include/             ← Shared kernel headers
-│   ├── fs/                  ← [TODO] Filesystem drivers
-│   │   └── ext2.c / .h
-│   ├── shell/               ← [TODO] Shell + terminal
-│   │   ├── shell.c
-│   │   └── terminal.c
-│   ├── task.c / .h          ← [TODO] Multitasking
-│   ├── sched.c / .h         ← [TODO] Scheduler
-│   ├── simd.c / .h          ← [TODO] AVX2 math ops
-│   ├── gpu/                 ← [TODO] GPU drivers
-│   │   └── amdgpu.c / .h
-│   └── llm/                 ← [TODO] LLM inference engine
-│       ├── tensor.c / .h
-│       ├── ops.c / .h
-│       ├── attention.c
-│       ├── transformer.c
-│       ├── model.c / .h
-│       ├── loader.c / .h
-│       ├── tokenizer.c / .h
-│       ├── quant.c
-│       ├── inference.c
-│       ├── grad.c / .h      ← [Optional] Training
-│       └── optimizer.c
-└── docs/                    ← Reference documents
+│   ├── task.c / .h          ← ⬜ TODO Phase 4.1
+│   ├── sched.c / .h         ← ⬜ TODO Phase 4.2
+│   ├── simd.c / .h          ← ⬜ TODO Phase 6.4
+│   ├── fs/
+│   │   └── vfs.c / .h       ← ⬜ TODO (VFS wrapping fat32)
+│   ├── shell/
+│   │   ├── shell.c          ← ⬜ TODO Phase 5.2
+│   │   └── terminal.c       ← ⬜ TODO Phase 5.1
+│   ├── gpu/
+│   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
+│   └── llm/
+│       ├── tensor.c / .h    ← ⬜ TODO Phase 7.1
+│       ├── ops.c / .h       ← ⬜ TODO Phase 7.2
+│       ├── attention.c      ← ⬜ TODO Phase 7.3
+│       ├── transformer.c    ← ⬜ TODO Phase 7.4
+│       ├── model.c / .h     ← ⬜ TODO Phase 7.5
+│       ├── loader.c / .h    ← ⬜ TODO Phase 7.6
+│       ├── tokenizer.c / .h ← ⬜ TODO Phase 7.7
+│       ├── quant.c          ← ⬜ TODO Phase 7.8
+│       └── inference.c      ← ⬜ TODO Phase 7.9
+└── docs/
 ```
 
 ---
 
-*Last updated: May 2026 — Phase 1.5/2.2 complete. Serial COM1 at 115200 baud active, kernel_panic() mirrors output to both VGA (red) and COM1 serial, #PF handler decodes CR2 + error-code bits. Heap smoke-test passes. Next: Phase 1.7 (Mouse driver) and Phase 2.2 VMM map/unmap test.*
+*Last updated: May 2026 — Phase 3.3 complete. FAT32 read-only driver operational: BPB parse, cluster chain traversal, 8.3 file find, file read. PCI enumeration + AHCI DMA read also complete. Next: Phase 1.7 (Mouse 3-byte packet parser) then Phase 4.1 (Context switching / scheduler).*
