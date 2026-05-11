@@ -1,9 +1,6 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 3.1 + 3.2 update:
- *   - pci_init() / pci_dump() wired after heap
- *   - ahci_init() + ahci_sector0_test() added
- *   - Phase banner updated
+ * Phase 3.3 update: FAT32 filesystem driver wired in.
  * ============================================================ */
 
 #include "include/vga.h"
@@ -20,6 +17,7 @@
 #include "serial.h"
 #include "pci.h"
 #include "ahci.h"
+#include "fat32.h"
 
 #include <stdint.h>
 
@@ -77,8 +75,8 @@ static void de_test_handler(interrupt_frame_t *frame)
 {
     vga_puts_color("  [ OK ] #DE handler fired — vector=0x",
                    VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_puthex(frame->int_num); vga_puts_color("  RIP=0x",
-                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puthex(frame->int_num);
+    vga_puts_color("  RIP=0x", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     vga_puthex(frame->rip); vga_putchar('\n');
     frame->rip += 3;
 }
@@ -110,12 +108,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 3: PCI Enumeration + AHCI SATA Driver\n",
+        "  Phase 3.3: FAT32 Filesystem Driver\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("\r\n=== AIOS Phase 3 boot ===\r\n");
+    klog("\r\n=== AIOS Phase 3.3 boot ===\r\n");
 
     /* ---- Multiboot2 ----------------------------------------- */
     if (magic == MULTIBOOT2_MAGIC)
@@ -222,8 +220,8 @@ void kernel_main(uint32_t magic, uint32_t addr)
     vga_putchar('\n');
     vga_puts_color("--- Phase 3.1: PCI Enumeration ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    pci_init();   /* enumerates all buses, prints count */
-    pci_dump();   /* prints each device to VGA */
+    pci_init();
+    pci_dump();
     print_ok("PCI enumeration complete");
 
     /* ===========================================================
@@ -231,24 +229,47 @@ void kernel_main(uint32_t magic, uint32_t addr)
      * =========================================================== */
     vga_puts_color("--- Phase 3.2: AHCI SATA Driver ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    int ahci_ok = 0;
+    int ahci_port = -1;
     if (ahci_init() == 0) {
-        /* Smoke-test: read sector 0 from the first available port */
         for (int p = 0; p < 32; p++) {
             if (ahci_port_available(p)) {
                 ahci_sector0_test(p);
-                break;   /* test one port is enough */
+                ahci_port = p;
+                break;
             }
         }
         print_ok("AHCI driver initialised");
+        ahci_ok = 1;
     } else {
         print_warn("AHCI init failed or no controller present");
     }
 
+    /* ===========================================================
+     * Phase 3.3 — FAT32 Filesystem
+     * =========================================================== */
+    vga_puts_color("--- Phase 3.3: FAT32 Filesystem ---\n",
+                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    if (ahci_ok && ahci_port >= 0) {
+        /* partition_lba = 0: BPB is at absolute LBA 0 (no MBR partition
+         * table; the disk image is formatted as a bare FAT32 volume).
+         * If your QEMU disk has an MBR, change 0 to the partition start
+         * LBA (e.g. 2048 for a standard MBR layout). */
+        if (fat32_init(ahci_port, 0) == 0) {
+            fat32_sector0_test();
+            print_ok("FAT32 filesystem ready");
+        } else {
+            print_warn("FAT32 init failed — disk may not be FAT32");
+        }
+    } else {
+        print_warn("FAT32 skipped — no AHCI disk available");
+    }
+
     vga_putchar('\n');
     vga_puts_color(
-        "AIOS Phase 3 boot complete.  Waiting for input...\n",
+        "AIOS Phase 3.3 boot complete.  Waiting for input...\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("Phase 3 boot complete.\r\n");
+    klog("Phase 3.3 boot complete.\r\n");
 
     for (;;) __asm__ volatile ("hlt");
 }
