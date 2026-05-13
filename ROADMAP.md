@@ -92,6 +92,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Scrolling works when text reaches bottom of screen (`scroll()` in vga.c)
 - ✅ Color support: `vga_set_color(fg, bg)` + `vga_puts_color()`
 - ✅ Hardware cursor updated on every `vga_putchar()` call
+- ✅ **Phase 5.1:** `vga_set_cursor(col,row)`, `vga_get_cursor(col,row)`, `vga_putchar_at(c,fg,bg,col,row)` added (`kernel/vga_phase51.c`)
 - ⬜ **TODO — Framebuffer (VESA/GOP):** Switch to linear framebuffer mode for pixel graphics (needed for GUI Phase 10). Parse multiboot framebuffer info tag. Implement `fb_put_pixel(x, y, color)`.
 
 ### 1.5 — Serial Port (Debug Output)
@@ -109,6 +110,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Scancode → ASCII translation table implemented (Set 1, normal + shifted)
 - ✅ Key event queue (ring buffer) `KBD_BUF_SIZE` entries, `keyboard_get_event()` API
 - ✅ Shift, Caps Lock, Ctrl modifiers handled
+- ✅ **Phase 5.1:** Extended E0 scancodes (arrows, Home, End, Del) decoded and fed to `terminal_feed()` — see `kernel/shell/terminal_kernel_main_patch.md`
 - ✅ Test: type characters, see them echoed on screen via `vga_puts()`
 
 ### 1.7 — Mouse Driver
@@ -299,16 +301,23 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 > Goal: An interactive shell that users can type into, and which can invoke built-in commands including the AI assistant.
 
-### 5.1 — Terminal Emulator ← **NEXT**
-- ⬜ Create `kernel/shell/terminal.c` + `kernel/shell/terminal.h`
-- ⬜ Ring buffer for input characters (keyboard → terminal)
-- ⬜ Line editing: backspace, left/right arrows, home/end
-- ⬜ History buffer: up/down arrows cycle through previous commands (32 entries, 256 chars each)
-- ⬜ `terminal_readline(buf, maxlen)` — blocking read until Enter pressed (calls `sched_yield()` while empty)
-- ⬜ ANSI escape code emitter: `term_move_cursor(col, row)`, `term_set_color(fg, bg)`, `term_clear_line()`
-- ⬜ `terminal_init()` called from `kernel_main` after sync primitives
+### 5.1 — Terminal Emulator
+- ✅ Created `kernel/shell/terminal.c` + `kernel/shell/terminal.h`
+- ✅ Ring buffer for input characters (keyboard → terminal)
+  - SPSC lock-free ring (`TERM_INPUT_BUF=256`, power-of-2 mask); ISR-safe via `spin_lock_irqsave`
+  - `terminal_feed(key)` callable from keyboard ISR; `ring_dequeue()` yields CPU while empty
+- ✅ Line editing: backspace, left/right arrows, home/end, Del key
+  - In-place insert/delete with `kmemmove`; full-line redraw after every edit
+- ✅ History buffer: up/down arrows cycle through previous commands (32 entries, 256 chars each)
+  - Live draft saved when user first presses ↑; restored on ↓ back past entry 0
+- ✅ `terminal_readline(buf, maxlen)` — blocking read until Enter pressed (calls `sched_yield()` while empty)
+- ✅ ANSI escape code emitter: `term_move_cursor(col, row)`, `term_set_color(fg, bg)`, `term_clear_line()`
+  - Uses CRTC registers directly (no ANSI parser needed in VGA text mode)
+  - Added `vga_set_cursor`, `vga_get_cursor`, `vga_putchar_at` to VGA driver (`kernel/vga_phase51.c`)
+- ✅ `terminal_init()` called from `kernel_main` after sync primitives
+  - Keyboard ISR extended-scancode wiring documented in `kernel/shell/terminal_kernel_main_patch.md`
 
-### 5.2 — Shell
+### 5.2 — Shell ← **NEXT**
 - ⬜ Create `kernel/shell/shell.c` + `kernel/shell/shell.h`
 - ⬜ Print prompt: `AIOS> `
 - ⬜ Parse command line: tokenize by spaces, handle quoted strings
@@ -493,11 +502,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, #DE test |
 | APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC, EOI |
 | PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete — 1000 Hz, IRQ0→0x20, tick+sleep |
-| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete — putchar, color, scroll, hw cursor |
+| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete — putchar, color, scroll, hw cursor, set/get cursor, putchar_at |
 | Serial | `kernel/serial.c`, `kernel/serial.h` | ✅ Complete — COM1 115200 baud, klog macros |
 | Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + cli+hlt |
 | Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + 7-bit error decode → panic |
-| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer |
+| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, E0 arrows/home/end/del |
 | Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete — IRQ12, 3-byte PS/2, VGA cursor, ring buffer |
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc |
 | VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map |
@@ -513,8 +522,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Scheduler | `kernel/sched.c`, `kernel/sched.h` | ✅ Complete — round-robin, sched_tick, sleep, yield, exit, idle |
 | kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete — kthread_create, kthread_exit, kthread_join |
 | Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete — spinlock (xchg+irqsave), mutex (yield-spin+waiter list), semaphore (counting) |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 4.4 — sync primitives wired |
-| Terminal | — | ⬜ Not started (Phase 5.1) |
+| Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 5.1 — terminal_init wired |
 | Shell | — | ⬜ Not started (Phase 5.2) |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
@@ -523,11 +532,10 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 5.1 — Terminal** ← **NEXT** — `terminal_readline`, line editing, history, ANSI colors
-2. **Phase 5.2 — Shell** — `AIOS> ` prompt, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`, `ai`)
-3. **Phase 5.3 — ACPI** — shutdown + reboot via FADT
-4. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
-5. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
+1. **Phase 5.2 — Shell** ← **NEXT** — `AIOS> ` prompt, tokenizer, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`, `ai`)
+2. **Phase 5.3 — ACPI** — shutdown + reboot via FADT
+3. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
+4. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
 
 ---
 
@@ -569,17 +577,18 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 4.4 — sync primitives wired
+│   ├── kernel_main.c        ← Phase 5.1 — terminal_init wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
 │   ├── apic.c / .h          ← ✅
 │   ├── pit.c / .h           ← ✅
-│   ├── vga.c                ← ✅
+│   ├── vga.c / vga.h        ← ✅ + Phase 5.1 additions
+│   ├── vga_phase51.c        ← ✅ merge into vga.c
 │   ├── serial.c / .h        ← ✅
 │   ├── panic.c              ← ✅
 │   ├── pf_handler.c         ← ✅
-│   ├── keyboard.c           ← ✅
+│   ├── keyboard.c           ← ✅ + E0 extended-key patch
 │   ├── mouse.c              ← ✅
 │   ├── pmm.c / .h           ← ✅
 │   ├── vmm.c / .h           ← ✅
@@ -599,8 +608,9 @@ AIOS/
 │   │   ├── vfs.c / .h       ← ✅
 │   │   └── vfs_initrd.c / .h← ✅ Phase 3.4
 │   ├── shell/
-│   │   ├── shell.c          ← ⬜ TODO Phase 5.2
-│   │   └── terminal.c       ← ⬜ TODO Phase 5.1  ← NEXT
+│   │   ├── terminal.c / .h  ← ✅ Phase 5.1
+│   │   ├── terminal_kernel_main_patch.md ← Phase 5.1 wiring guide
+│   │   └── shell.c          ← ⬜ TODO Phase 5.2  ← NEXT
 │   ├── gpu/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
 │   └── llm/
@@ -618,4 +628,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 4.4 complete. Synchronization primitives operational: spinlock (atomic xchgl + IRQ-safe save/restore), mutex (yield-spin + waiter list, guard spinlock), semaphore (counting, sem_wait/sem_post/sem_trywait). Phase 4 fully done. Next: Phase 5.1 (terminal readline + line editing + history) then Phase 5.2 (shell with built-in commands). Semaphore is the backbone of the LLM token-streaming pipeline (Phase 7.9).*
+*Last updated: May 2026 — Phase 5.1 complete. Terminal emulator operational: SPSC ring buffer (IRQ-safe), full line editor (insert/delete/←/→/Home/End/Del), 32-entry×256-char history with live-draft save/restore, `terminal_readline()` (yield-based blocking), ANSI-style CRTC emitter (`term_move_cursor`, `term_set_color`, `term_clear_line`). VGA extended with `vga_set_cursor`, `vga_get_cursor`, `vga_putchar_at`. Keyboard ISR extended-scancode (E0 prefix) wiring documented. Next: Phase 5.2 (shell: AIOS> prompt, tokenizer, built-in commands).*
