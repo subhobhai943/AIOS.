@@ -298,16 +298,12 @@ void fat32_sector0_test(void)
     klog_dec((uint32_t)got);
     klog(" bytes: ");
 
-    /*
-     * FIX (Bug 1): serial_write() does not exist in serial.h.
-     * The declared API is serial_putc(port, char).
-     * Emit each byte as two hex nibble chars + a space using serial_putc.
-     */
+    /* Emit each byte as two hex nibble chars + a space using serial_putchar. */
     static const char hexchars[] = "0123456789ABCDEF";
     for (int i = 0; i < got; i++) {
-        serial_putc(SERIAL_COM1, hexchars[tbuf[i] >> 4]);
-        serial_putc(SERIAL_COM1, hexchars[tbuf[i] & 0xF]);
-        serial_putc(SERIAL_COM1, ' ');
+        serial_putchar(SERIAL_COM1, hexchars[tbuf[i] >> 4]);
+        serial_putchar(SERIAL_COM1, hexchars[tbuf[i] & 0xF]);
+        serial_putchar(SERIAL_COM1, ' ');
     }
     klog("\r\n");
 
