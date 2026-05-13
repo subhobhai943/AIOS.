@@ -263,7 +263,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `sched_add(task)` — enqueue a task into the ready queue
 - ✅ Test: 3 tasks (A/B/C) created in `kernel_main`, each prints its letter and sleeps 250 ms, interleaved output on VGA proves preemption
 
-### 4.3 — Kernel Threads ← **CURRENT PHASE**
+### 4.3 — Kernel Threads
 - ✅ `kthread_create(fn, arg)` — convenience wrapper: creates a kernel-mode thread, adds to scheduler
   - `kernel/kthread.c` + `kernel/kthread.h`
   - `kthread_t` handle type; `kthread_create(fn, arg, stack_size, name)` → `kthread_t`
@@ -273,11 +273,18 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ All early kernel services can now run as kthreads (LLM inference thread, I/O threads)
 - ✅ Smoke-test in `kernel_main`: one kthread created, prints a banner, exits; `kthread_join` confirms it finished
 
-### 4.4 — Synchronization Primitives ← **NEXT**
-- ⬜ Spinlock: `spinlock_t`, `spin_lock()`, `spin_unlock()` using atomic `xchg`
-- ⬜ Mutex: `mutex_t`, `mutex_lock()` (sleeps if busy), `mutex_unlock()`
-- ⬜ Semaphore: `sem_t`, `sem_wait()`, `sem_post()`
-- ⬜ These are critical for LLM: inference runs in one thread, shell reads output in another
+### 4.4 — Synchronization Primitives
+- ✅ Spinlock: `spinlock_t`, `spin_lock()`, `spin_unlock()`, `spin_try_lock()` using atomic `lock xchgl`
+  - `kernel/sync.c` + `kernel/sync.h`
+  - IRQ-safe variants: `spin_lock_irqsave()` / `spin_unlock_irqrestore()` save/restore RFLAGS
+  - `cpu_pause()` inside spin loops — reduces memory-bus pressure on hyperthreaded cores
+- ✅ Mutex: `mutex_t`, `mutex_lock()` (yield-spins; never busy-waits), `mutex_unlock()`, `mutex_try_lock()`
+  - Waiter list (`waiters[MUTEX_WAITER_MAX]`) tracks blocked PIDs for future sleep-based upgrade
+  - `guard` spinlock protects waiter list mutations; owner PID stored for debugging
+- ✅ Semaphore: `sem_t`, `sem_wait()` (blocks via `sched_yield()` if count==0), `sem_post()`, `sem_trywait()`, `sem_value()`
+  - Counting semaphore; `sem_init(s, initial_count)` for both mutex-style (1) and producer/consumer (N) uses
+  - Used by LLM inference pipeline: producer kthread posts when a token is ready, shell kthread waits
+- ✅ All three primitives are IRQ-context-safe for spinlock; mutex/semaphore must not be called from ISR context
 
 ### 4.5 — User Mode (Ring 3)
 - ⬜ TSS set up with kernel stack pointer (RSP0) per task
@@ -292,16 +299,17 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 > Goal: An interactive shell that users can type into, and which can invoke built-in commands including the AI assistant.
 
-### 5.1 — Terminal Emulator
-- ⬜ Create `kernel/shell/terminal.c`
+### 5.1 — Terminal Emulator ← **NEXT**
+- ⬜ Create `kernel/shell/terminal.c` + `kernel/shell/terminal.h`
 - ⬜ Ring buffer for input characters (keyboard → terminal)
 - ⬜ Line editing: backspace, left/right arrows, home/end
-- ⬜ History buffer: up/down arrows cycle through previous commands
-- ⬜ `terminal_readline(buf, maxlen)` — blocking read until Enter pressed
-- ⬜ ANSI escape code support: cursor movement, colors (for AI output formatting)
+- ⬜ History buffer: up/down arrows cycle through previous commands (32 entries, 256 chars each)
+- ⬜ `terminal_readline(buf, maxlen)` — blocking read until Enter pressed (calls `sched_yield()` while empty)
+- ⬜ ANSI escape code emitter: `term_move_cursor(col, row)`, `term_set_color(fg, bg)`, `term_clear_line()`
+- ⬜ `terminal_init()` called from `kernel_main` after sync primitives
 
 ### 5.2 — Shell
-- ⬜ Create `kernel/shell/shell.c`
+- ⬜ Create `kernel/shell/shell.c` + `kernel/shell/shell.h`
 - ⬜ Print prompt: `AIOS> `
 - ⬜ Parse command line: tokenize by spaces, handle quoted strings
 - ⬜ Built-in commands:
@@ -504,9 +512,10 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Context switch | `kernel/switch_context.asm` | ✅ Complete — NASM callee-save swap |
 | Scheduler | `kernel/sched.c`, `kernel/sched.h` | ✅ Complete — round-robin, sched_tick, sleep, yield, exit, idle |
 | kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete — kthread_create, kthread_exit, kthread_join |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 4.3 — initrd + kthread smoke-tests wired |
-| Sync primitives | — | ⬜ Not started |
-| Shell | — | ⬜ Not started |
+| Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete — spinlock (xchg+irqsave), mutex (yield-spin+waiter list), semaphore (counting) |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 4.4 — sync primitives wired |
+| Terminal | — | ⬜ Not started (Phase 5.1) |
+| Shell | — | ⬜ Not started (Phase 5.2) |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
@@ -514,11 +523,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 4.4 — Sync primitives** ← **NEXT** — spinlock (`xchg`), mutex (sleep-based), semaphore
-2. **Phase 5.1 — Terminal** — `terminal_readline`, line editing, history, ANSI colors
-3. **Phase 5.2 — Shell** — `AIOS> ` prompt, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`, `ai`)
-4. **Phase 5.3 — ACPI** — shutdown + reboot via FADT
-5. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
+1. **Phase 5.1 — Terminal** ← **NEXT** — `terminal_readline`, line editing, history, ANSI colors
+2. **Phase 5.2 — Shell** — `AIOS> ` prompt, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`, `ai`)
+3. **Phase 5.3 — ACPI** — shutdown + reboot via FADT
+4. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
+5. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
 
 ---
 
@@ -560,7 +569,7 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 4.3 — initrd + kthread wired
+│   ├── kernel_main.c        ← Phase 4.4 — sync primitives wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -584,13 +593,14 @@ AIOS/
 │   ├── switch_context.asm   ← ✅
 │   ├── sched.c / .h         ← ✅
 │   ├── kthread.c / .h       ← ✅ Phase 4.3
+│   ├── sync.c / .h          ← ✅ Phase 4.4
 │   ├── include/
 │   ├── fs/
 │   │   ├── vfs.c / .h       ← ✅
 │   │   └── vfs_initrd.c / .h← ✅ Phase 3.4
 │   ├── shell/
 │   │   ├── shell.c          ← ⬜ TODO Phase 5.2
-│   │   └── terminal.c       ← ⬜ TODO Phase 5.1
+│   │   └── terminal.c       ← ⬜ TODO Phase 5.1  ← NEXT
 │   ├── gpu/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
 │   └── llm/
@@ -608,4 +618,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 4.3 complete. kthread API operational: kthread_create wraps task_create+sched_add, kthread_exit calls sched_exit, kthread_join yield-spins until DEAD. Initrd/ramdisk (Phase 3.4) fully wired: ARDS format, mkinitrd.py, mb2_modules parser, vfs_initrd shim. Next: Phase 4.4 (spinlock/mutex/semaphore) then Phase 5.1 (terminal readline) then Phase 5.2 (shell).*
+*Last updated: May 2026 — Phase 4.4 complete. Synchronization primitives operational: spinlock (atomic xchgl + IRQ-safe save/restore), mutex (yield-spin + waiter list, guard spinlock), semaphore (counting, sem_wait/sem_post/sem_trywait). Phase 4 fully done. Next: Phase 5.1 (terminal readline + line editing + history) then Phase 5.2 (shell with built-in commands). Semaphore is the backbone of the LLM token-streaming pipeline (Phase 7.9).*
