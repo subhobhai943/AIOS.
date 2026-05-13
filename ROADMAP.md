@@ -222,11 +222,21 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - ✅ `vfs_close(fd)` — release fd slot
 - ✅ `kernel_main` Phase 3.3 block: `fat32_init` + `fat32_sector0_test` + `vfs_open("/TEST.TXT")` smoke-test
 
-### 3.4 — Initrd / Ramdisk ← **CURRENT PHASE**
-- ⬜ Pack initial files into a ramdisk (CPIO or custom format) embedded in the ISO
-- ⬜ Kernel reads ramdisk from multiboot module list (`--module` in grub.cfg)
-- ⬜ Mount ramdisk as root filesystem before real disk driver is ready
-- ⬜ Put LLM tokenizer vocab and initial config here
+### 3.4 — Initrd / Ramdisk
+- ✅ Pack initial files into a ramdisk (custom `ARDS` flat-binary format) embedded in the ISO
+  - `scripts/mkinitrd.py` — Python3 image builder; output to `boot/initrd.img`
+  - Format: 16-byte header + N×64-byte directory entries + packed file data
+- ✅ Kernel reads ramdisk from multiboot module list (`module2` in `boot/grub.cfg`)
+  - `kernel/mb2_modules.c` — walks MB2 tags, finds type-3 module whose string contains `"initrd"` or is empty
+  - `mb2_find_initrd(mb2_phys, &phys, &size)` called in `kernel_main`
+- ✅ Mount ramdisk as root filesystem before real disk driver is ready
+  - `kernel/initrd.c` — zero-copy mount: pointer arithmetic into identity-mapped image
+  - `initrd_init()`, `initrd_find()`, `initrd_get_file()`, `initrd_file_count()`
+  - `kernel/fs/vfs_initrd.c` — `/initrd/` prefix shim; `vfs_initrd_open()` + `vfs_initrd_register()`
+- ✅ Put LLM tokenizer vocab and initial config here
+  - `assets/tokenizer/vocab.bin` — placeholder (will be BPE vocab in Phase 7.7)
+  - `assets/tokenizer/config.bin` — `vocab_size=50257`, `model_type=gpt2`, `max_seq_len=1024`
+- ✅ Integration patch documented in `kernel/kernel_main_initrd_patch.md`
 
 ---
 
@@ -253,11 +263,17 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `sched_add(task)` — enqueue a task into the ready queue
 - ✅ Test: 3 tasks (A/B/C) created in `kernel_main`, each prints its letter and sleeps 250 ms, interleaved output on VGA proves preemption
 
-### 4.3 — Kernel Threads ← **NEXT PHASE**
-- ⬜ `kthread_create(fn, arg)` — convenience wrapper: creates a kernel-mode thread, adds to scheduler
-- ⬜ All early kernel services run as kthreads: idle thread (already done), LLM inference thread, I/O threads
+### 4.3 — Kernel Threads ← **CURRENT PHASE**
+- ✅ `kthread_create(fn, arg)` — convenience wrapper: creates a kernel-mode thread, adds to scheduler
+  - `kernel/kthread.c` + `kernel/kthread.h`
+  - `kthread_t` handle type; `kthread_create(fn, arg, stack_size, name)` → `kthread_t`
+  - Internally calls `task_create` + `sched_add`; returns opaque handle
+- ✅ `kthread_exit()` — calls `sched_exit()` from within the thread
+- ✅ `kthread_join(t)` — spins (yield-based) until target thread reaches DEAD state
+- ✅ All early kernel services can now run as kthreads (LLM inference thread, I/O threads)
+- ✅ Smoke-test in `kernel_main`: one kthread created, prints a banner, exits; `kthread_join` confirms it finished
 
-### 4.4 — Synchronization Primitives
+### 4.4 — Synchronization Primitives ← **NEXT**
 - ⬜ Spinlock: `spinlock_t`, `spin_lock()`, `spin_unlock()` using atomic `xchg`
 - ⬜ Mutex: `mutex_t`, `mutex_lock()` (sleeps if busy), `mutex_unlock()`
 - ⬜ Semaphore: `sem_t`, `sem_wait()`, `sem_post()`
@@ -464,7 +480,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 |-----------|-------|--------|
 | Build system | `build.sh`, `Makefile`, `boot/linker.ld` | ✅ Complete |
 | Dep checker | `scripts/check_deps.sh` | ✅ Complete |
-| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Complete |
+| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Complete — `module2 /boot/initrd.img` added |
 | GDT | `kernel/gdt.c` | ✅ Complete — TSS, far-jump CS reload, ltr |
 | IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, #DE test |
 | APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC, EOI |
@@ -482,12 +498,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete — HBA init, port detect, DMA read+write, sector0 test |
 | FAT32 | `kernel/fat32.c`, `kernel/fat32.h` | ✅ Complete — BPB parse, cluster chain, LFN, find/read/write/create |
 | VFS | `kernel/fs/vfs.c`, `kernel/fs/vfs.h` | ✅ Complete — vfs_open/read/close wrapping FAT32 |
+| Initrd | `kernel/initrd.c`, `kernel/mb2_modules.c`, `kernel/fs/vfs_initrd.c` | ✅ Complete — ARDS format, MB2 module parse, VFS /initrd/ shim |
+| mkinitrd | `scripts/mkinitrd.py` | ✅ Complete — Python3 image builder |
 | Task system | `kernel/task.c`, `kernel/task.h` | ✅ Complete — pid, states, task_create, task_destroy |
 | Context switch | `kernel/switch_context.asm` | ✅ Complete — NASM callee-save swap |
 | Scheduler | `kernel/sched.c`, `kernel/sched.h` | ✅ Complete — round-robin, sched_tick, sleep, yield, exit, idle |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 4.2 — all above wired, A/B/C task interleave test |
-| Initrd/Ramdisk | — | ⬜ Not started |
-| kthread API | — | ⬜ Not started |
+| kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete — kthread_create, kthread_exit, kthread_join |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 4.3 — initrd + kthread smoke-tests wired |
 | Sync primitives | — | ⬜ Not started |
 | Shell | — | ⬜ Not started |
 | LLM engine | — | ⬜ Not started |
@@ -497,11 +514,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 3.4 — Initrd/Ramdisk** ← **NEXT** — custom flat binary ramdisk format, embed via GRUB `--module`, parse MB2 module tag in kernel, expose files via VFS before AHCI is ready
-2. **Phase 4.3 — kthread API** — `kthread_create(fn, arg)` thin wrapper over `task_create` + `sched_add`
-3. **Phase 4.4 — Sync primitives** — spinlock (`xchg`), mutex (sleep-based), semaphore
-4. **Phase 5.1 — Terminal** — `terminal_readline`, line editing, history, ANSI colors
-5. **Phase 5.2 — Shell** — `AIOS> ` prompt, tokenizer, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`)
+1. **Phase 4.4 — Sync primitives** ← **NEXT** — spinlock (`xchg`), mutex (sleep-based), semaphore
+2. **Phase 5.1 — Terminal** — `terminal_readline`, line editing, history, ANSI colors
+3. **Phase 5.2 — Shell** — `AIOS> ` prompt, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`, `ai`)
+4. **Phase 5.3 — ACPI** — shutdown + reboot via FADT
+5. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
 
 ---
 
@@ -532,13 +549,18 @@ AIOS/
 ├── .gitignore
 ├── LICENSE
 ├── scripts/
-│   └── check_deps.sh
+│   ├── check_deps.sh
+│   └── mkinitrd.py          ← ✅ Phase 3.4
+├── assets/
+│   └── tokenizer/
+│       ├── vocab.bin        ← placeholder (Phase 7.7)
+│       └── config.bin       ← gpt2, vocab=50257, seq=1024
 ├── boot/
-│   ├── grub.cfg
-│   ├── kernel_entry.asm     ← Multiboot2 entry, SSE/SSE2, 64-bit mode
+│   ├── grub.cfg             ← module2 /boot/initrd.img added
+│   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 4.2 — all subsystems wired
+│   ├── kernel_main.c        ← Phase 4.3 — initrd + kthread wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -549,19 +571,23 @@ AIOS/
 │   ├── panic.c              ← ✅
 │   ├── pf_handler.c         ← ✅
 │   ├── keyboard.c           ← ✅
-│   ├── mouse.c              ← ✅ Complete
+│   ├── mouse.c              ← ✅
 │   ├── pmm.c / .h           ← ✅
 │   ├── vmm.c / .h           ← ✅
 │   ├── heap.c / .h          ← ✅
 │   ├── pci.c / .h           ← ✅
 │   ├── ahci.c / .h          ← ✅
-│   ├── fat32.c / .h         ← ✅  (read + write + LFN)
+│   ├── fat32.c / .h         ← ✅
+│   ├── initrd.c / .h        ← ✅ Phase 3.4
+│   ├── mb2_modules.c / .h   ← ✅ Phase 3.4
 │   ├── task.c / .h          ← ✅
 │   ├── switch_context.asm   ← ✅
 │   ├── sched.c / .h         ← ✅
-│   ├── include/             ← Shared kernel headers
+│   ├── kthread.c / .h       ← ✅ Phase 4.3
+│   ├── include/
 │   ├── fs/
-│   │   └── vfs.c / .h       ← ✅ Complete
+│   │   ├── vfs.c / .h       ← ✅
+│   │   └── vfs_initrd.c / .h← ✅ Phase 3.4
 │   ├── shell/
 │   │   ├── shell.c          ← ⬜ TODO Phase 5.2
 │   │   └── terminal.c       ← ⬜ TODO Phase 5.1
@@ -582,4 +608,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 4.2 complete. Preemptive round-robin scheduler operational: task_create, switch_context, sched_tick (PIT IRQ), sched_sleep, sched_yield, sched_exit, idle task. FAT32 read+write+LFN + VFS layer also complete. Next: Phase 3.4 (Initrd/Ramdisk) then Phase 4.3 (kthread API) then Phase 4.4 (sync primitives) then Phase 5 (Shell).*
+*Last updated: May 2026 — Phase 4.3 complete. kthread API operational: kthread_create wraps task_create+sched_add, kthread_exit calls sched_exit, kthread_join yield-spins until DEAD. Initrd/ramdisk (Phase 3.4) fully wired: ARDS format, mkinitrd.py, mb2_modules parser, vfs_initrd shim. Next: Phase 4.4 (spinlock/mutex/semaphore) then Phase 5.1 (terminal readline) then Phase 5.2 (shell).*
