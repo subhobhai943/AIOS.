@@ -10,9 +10,9 @@
  *   - Short 8.3 filenames (LFN skipped with FAT_ATTR_LFN check)
  *   - Cluster chain traversal via FAT table
  *   - Read entire file into caller-supplied buffer
+ *   - Long File Names (LFN / VFAT) — read-only search
  *
  * Not yet supported (Phase 4):
- *   - Long File Names (LFN)
  *   - Write / create / delete
  *   - Subdirectory traversal via path string
  *   - Partition table detection (always assumes partition_lba param)
@@ -309,4 +309,278 @@ void fat32_sector0_test(void)
 
     vga_puts_color("  [ OK ] FAT32 read test PASSED\n",
                    VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+}
+
+/* ================================================================
+ * Long File Name (LFN) support
+ *
+ * Provides a helper search API that understands VFAT-style long
+ * file name entries.  This is read-only and intended for use by
+ * higher-level path / VFS code.
+ * ================================================================ */
+
+#define FAT32_MAX_LFN_CHARS   255
+#define FAT32_LFN_ENTRY_CHARS 13
+
+typedef struct {
+    char    name[FAT32_MAX_LFN_CHARS + 1];
+    uint8_t seq_total;
+    bool    in_use;
+} fat32_lfn_state_t;
+
+static void lfn_reset(fat32_lfn_state_t *st)
+{
+    st->in_use    = false;
+    st->seq_total = 0;
+    st->name[0]   = '\0';
+}
+
+static void lfn_add_entry(fat32_lfn_state_t *st, const uint8_t *raw)
+{
+    uint8_t seq = raw[0];
+    uint8_t ord = (uint8_t)(seq & 0x1Fu);
+
+    if (ord == 0u || ord > 20u) {
+        st->in_use = false;
+        return;
+    }
+
+    if (seq & 0x40u) {
+        /* Start of a new LFN sequence (last logical, first physical). */
+        st->in_use    = true;
+        st->seq_total = ord;
+        for (size_t i = 0; i < (size_t)(FAT32_MAX_LFN_CHARS + 1); i++) {
+            st->name[i] = '\0';
+        }
+    } else if (!st->in_use) {
+        /* Stray LFN without a starting entry. */
+        return;
+    }
+
+    /* Position of the first character contributed by this entry. */
+    uint32_t index_base = ((uint32_t)ord - 1u) * (uint32_t)FAT32_LFN_ENTRY_CHARS;
+    if (index_base >= FAT32_MAX_LFN_CHARS) {
+        return;
+    }
+
+    /* Each LFN entry encodes up to 13 UTF-16 characters spread across
+     * three fields: Name1 (5 chars at offset 1), Name2 (6 chars at
+     * offset 14), Name3 (2 chars at offset 28).
+     */
+    const uint8_t offsets[3] = { 1u, 14u, 28u };
+    const uint8_t counts[3]  = { 5u, 6u,  2u  };
+
+    for (int blk = 0; blk < 3; blk++) {
+        uint8_t off = offsets[blk];
+        uint8_t cnt = counts[blk];
+
+        for (uint8_t i = 0; i < cnt; i++) {
+            uint8_t lo = raw[off + (uint8_t)(i * 2u)];
+            uint8_t hi = raw[off + (uint8_t)(i * 2u) + 1u];
+            uint16_t u = (uint16_t)lo | ((uint16_t)hi << 8);
+
+            if (u == 0x0000u) {
+                /* Explicit terminator. */
+                if (index_base < FAT32_MAX_LFN_CHARS) {
+                    st->name[index_base] = '\0';
+                }
+                return;
+            }
+            if (u == 0xFFFFu) {
+                /* Padding. */
+                return;
+            }
+            if (index_base >= FAT32_MAX_LFN_CHARS) {
+                return;
+            }
+
+            /* For now we only support the basic ASCII subset from UCS-2. */
+            st->name[index_base] = to_upper((char)(u & 0xFFu));
+            index_base++;
+        }
+    }
+}
+
+static void lfn_finalize(fat32_lfn_state_t *st)
+{
+    if (!st->in_use) return;
+
+    size_t max_chars = (size_t)st->seq_total * (size_t)FAT32_LFN_ENTRY_CHARS;
+    if (max_chars > FAT32_MAX_LFN_CHARS) {
+        max_chars = FAT32_MAX_LFN_CHARS;
+    }
+
+    size_t i;
+    for (i = 0; i < max_chars; i++) {
+        if (st->name[i] == '\0') break;
+    }
+    if (i == max_chars) {
+        st->name[max_chars] = '\0';
+    }
+}
+
+static void str_to_upper(const char *src, char *dst, size_t dst_len)
+{
+    if (!src || !dst || dst_len == 0) return;
+
+    size_t i = 0;
+    for (; i + 1 < dst_len && src[i] != '\0'; i++) {
+        dst[i] = to_upper(src[i]);
+    }
+    dst[i] = '\0';
+}
+
+static bool str_equals_ci(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    while (*a || *b) {
+        char ca = to_upper(*a);
+        char cb = to_upper(*b);
+        if (ca != cb) return false;
+        if (ca == '\0') break;
+        a++;
+        b++;
+    }
+    return true;
+}
+
+/* Build an 8.3 comparison key (11 chars) from an input name.
+ * Rules:
+ *   - Ignore spaces.
+ *   - First '.' switches from name to ext; further '.' are ignored.
+ *   - Upper-case everything.
+ *   - Truncate to 8 chars for name and 3 chars for ext.
+ */
+static bool build_name83(const char *name, char out[11])
+{
+    if (!name) return false;
+
+    for (int i = 0; i < 11; i++) {
+        out[i] = ' ';
+    }
+
+    int  i_name = 0;
+    int  i_ext  = 8;
+    bool in_ext = false;
+
+    for (size_t src = 0; ; src++) {
+        char c = name[src];
+        if (c == '\0') break;
+        if (c == '.') {
+            if (in_ext) {
+                /* Ignore additional dots. */
+                continue;
+            }
+            in_ext = true;
+            continue;
+        }
+        if (c == ' ') {
+            continue;
+        }
+        c = to_upper(c);
+
+        if (!in_ext) {
+            if (i_name >= 8) continue;
+            out[i_name++] = c;
+        } else {
+            if (i_ext >= 11) continue;
+            out[i_ext++] = c;
+        }
+    }
+
+    return i_name > 0;
+}
+
+int fat32_find_file_lfn(uint32_t dir_cluster,
+                        const char *name,
+                        uint32_t *out_cluster,
+                        uint32_t *out_size)
+{
+    if (!g_ready || dir_cluster < 2u || !name ||
+        !out_cluster || !out_size) {
+        return -1;
+    }
+
+    char target_up[FAT32_MAX_LFN_CHARS + 1];
+    str_to_upper(name, target_up, sizeof(target_up));
+
+    char name83[11];
+    bool have_name83 = build_name83(target_up, name83);
+
+    uint32_t          cluster = dir_cluster;
+    fat32_lfn_state_t lfn;
+    lfn_reset(&lfn);
+
+    while (cluster >= 2u && cluster < FAT32_EOC_MIN) {
+        if (fat32_read_cluster(cluster, s_cluster_buf) != 0) {
+            return -1;
+        }
+
+        int entries_in_cluster = (g_spc * 512) / 32;
+        fat32_dir_entry_t *de  = (fat32_dir_entry_t *)s_cluster_buf;
+
+        for (int i = 0; i < entries_in_cluster; i++, de++) {
+            uint8_t first = (uint8_t)de->name[0];
+            if (first == 0x00u) {
+                /* No more entries in this directory. */
+                return -1;
+            }
+            if (first == 0xE5u) {
+                /* Deleted entry; reset any pending LFN state. */
+                lfn_reset(&lfn);
+                continue;
+            }
+
+            if (de->attr == FAT_ATTR_LFN) {
+                /* LFN fragment; accumulate. */
+                lfn_add_entry(&lfn, (const uint8_t *)de);
+                continue;
+            }
+
+            if (de->attr & FAT_ATTR_VOLUME_ID) {
+                /* Skip volume label entries; LFN (if any) is discarded. */
+                lfn_reset(&lfn);
+                continue;
+            }
+
+            bool match = false;
+
+            if (lfn.in_use) {
+                /* We have an assembled LFN preceding this SFN. */
+                lfn_finalize(&lfn);
+                if (str_equals_ci(lfn.name, target_up)) {
+                    match = true;
+                }
+            }
+
+            if (!match && have_name83) {
+                /* Fallback to 8.3 comparison. */
+                char cmp[11];
+                for (int j = 0; j < 8; j++) {
+                    cmp[j] = to_upper(de->name[j]);
+                }
+                for (int j = 0; j < 3; j++) {
+                    cmp[8 + j] = to_upper(de->ext[j]);
+                }
+
+                if (memcmp_k(cmp, name83, 11) == 0) {
+                    match = true;
+                }
+            }
+
+            if (match) {
+                *out_cluster = ((uint32_t)de->first_cluster_hi << 16)
+                             |  (uint32_t)de->first_cluster_lo;
+                *out_size    = de->file_size;
+                return 0;
+            }
+
+            /* LFN only applies to the immediately following SFN entry. */
+            lfn_reset(&lfn);
+        }
+
+        cluster = fat32_next_cluster(cluster);
+    }
+
+    return -1;
 }

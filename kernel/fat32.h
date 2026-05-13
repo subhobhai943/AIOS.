@@ -150,4 +150,18 @@ int  fat32_read_file(uint32_t first_cluster, void *buf, uint32_t max_bytes);
  */
 void fat32_sector0_test(void);
 
+/*
+ * fat32_find_file_lfn(dir_cluster, name, out_cluster, out_size)
+ *   Search the directory starting at `dir_cluster` for a file
+ *   whose long file name (LFN) or short 8.3 name matches `name`.
+ *   `name` is a zero-terminated ASCII string (case-insensitive),
+ *   for example "Test File.txt".
+ *   On success fills *out_cluster and *out_size, returns 0.
+ *   Returns -1 if not found or I/O error.
+ */
+int  fat32_find_file_lfn(uint32_t dir_cluster,
+                         const char *name,
+                         uint32_t *out_cluster,
+                         uint32_t *out_size);
+
 #endif /* FAT32_H */
