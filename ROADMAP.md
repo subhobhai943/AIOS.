@@ -317,24 +317,28 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `terminal_init()` called from `kernel_main` after sync primitives
   - Keyboard ISR extended-scancode wiring documented in `kernel/shell/terminal_kernel_main_patch.md`
 
-### 5.2 — Shell ← **NEXT**
-- ⬜ Create `kernel/shell/shell.c` + `kernel/shell/shell.h`
-- ⬜ Print prompt: `AIOS> `
-- ⬜ Parse command line: tokenize by spaces, handle quoted strings
-- ⬜ Built-in commands:
-  - ⬜ `help` — list commands
-  - ⬜ `clear` — clear screen
-  - ⬜ `mem` — print physical/virtual memory usage stats
-  - ⬜ `ps` — list running tasks with PID and state
-  - ⬜ `ls [path]` — list directory
-  - ⬜ `cat [file]` — print file contents
-  - ⬜ `load [model]` — load an LLM model from disk
-  - ⬜ `ai [prompt]` — send prompt to loaded LLM, stream output to terminal
-  - ⬜ `chat` — enter interactive chat mode (multi-turn conversation)
-  - ⬜ `reboot` — reboot system
-  - ⬜ `shutdown` — power off (ACPI)
+### 5.2 — Shell
+- ✅ Created `kernel/shell/shell.c` + `kernel/shell/shell.h`
+- ✅ Print prompt: `AIOS> ` (light-green, resets to white for input)
+- ✅ Parse command line: tokenize by spaces, handle single-quoted strings (`'hello world'` → one token)
+- ✅ Built-in commands:
+  - ✅ `help` — list commands with usage + description, colour-coded
+  - ✅ `clear` — `vga_clear()`
+  - ✅ `echo <args...>` — print arguments to screen
+  - ✅ `mem` — PMM total/used/free pages (MB) + heap used/free (KB)
+  - ✅ `ps` — list all tasks: PID, state (RUNNING/READY/BLOCKED/SLEEPING/DEAD), name
+  - ✅ `ls [path]` — initrd file listing (default); FAT32 dir listing if path given
+  - ✅ `cat <file>` — initrd or VFS/FAT32 file, printable chars + `.` substitution, 4 KB limit
+  - ✅ `hexdump <file>` — classic 16-byte rows, hex + ASCII, first 256 bytes
+  - ✅ `load <model>` — opens file via VFS, confirms existence; loader stub (Phase 7.6)
+  - ✅ `ai <prompt...>` — echoes prompt + inference stub message (Phase 7.9)
+  - ✅ `chat` — interactive multi-turn loop (type `exit` to return); inference stub (Phase 7.9)
+  - ✅ `reboot` — PS/2 controller reset pulse; triple-fault fallback; ACPI path at Phase 5.3
+  - ✅ `shutdown` — QEMU ACPI port 0x604/0xB004/0x600; ACPI FADT path at Phase 5.3
+- ✅ `shell_run(void *arg)` kthread entry — launched via `kthread_create(shell_run, NULL, 65536, "shell")`
+- ✅ Wiring + API additions documented in `kernel/shell/shell_kernel_main_patch.md`
 
-### 5.3 — ACPI (Power Management)
+### 5.3 — ACPI (Power Management) ← **NEXT**
 - ⬜ Create `kernel/acpi.c` + `kernel/acpi.h`
 - ⬜ Find RSDP in BIOS area or EFI config table
 - ⬜ Parse RSDT/XSDT to find FADT
@@ -523,8 +527,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete — kthread_create, kthread_exit, kthread_join |
 | Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete — spinlock (xchg+irqsave), mutex (yield-spin+waiter list), semaphore (counting) |
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 5.1 — terminal_init wired |
-| Shell | — | ⬜ Not started (Phase 5.2) |
+| Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 5.2 — shell kthread launched |
+| ACPI | — | ⬜ Not started (Phase 5.3) |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
@@ -532,10 +537,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 5.2 — Shell** ← **NEXT** — `AIOS> ` prompt, tokenizer, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`, `ai`)
-2. **Phase 5.3 — ACPI** — shutdown + reboot via FADT
-3. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
-4. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
+1. **Phase 5.3 — ACPI** ← **NEXT** — `acpi_shutdown()` / `acpi_reboot()` via FADT (RSDP → RSDT/XSDT → FADT)
+2. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
+3. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
 
 ---
 
@@ -577,7 +581,7 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 5.1 — terminal_init wired
+│   ├── kernel_main.c        ← Phase 5.2 — shell kthread launched
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -609,8 +613,10 @@ AIOS/
 │   │   └── vfs_initrd.c / .h← ✅ Phase 3.4
 │   ├── shell/
 │   │   ├── terminal.c / .h  ← ✅ Phase 5.1
-│   │   ├── terminal_kernel_main_patch.md ← Phase 5.1 wiring guide
-│   │   └── shell.c          ← ⬜ TODO Phase 5.2  ← NEXT
+│   │   ├── shell.c / .h     ← ✅ Phase 5.2
+│   │   ├── terminal_kernel_main_patch.md
+│   │   └── shell_kernel_main_patch.md
+│   ├── acpi.c / .h          ← ⬜ TODO Phase 5.3  ← NEXT
 │   ├── gpu/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
 │   └── llm/
@@ -628,4 +634,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 5.1 complete. Terminal emulator operational: SPSC ring buffer (IRQ-safe), full line editor (insert/delete/←/→/Home/End/Del), 32-entry×256-char history with live-draft save/restore, `terminal_readline()` (yield-based blocking), ANSI-style CRTC emitter (`term_move_cursor`, `term_set_color`, `term_clear_line`). VGA extended with `vga_set_cursor`, `vga_get_cursor`, `vga_putchar_at`. Keyboard ISR extended-scancode (E0 prefix) wiring documented. Next: Phase 5.2 (shell: AIOS> prompt, tokenizer, built-in commands).*
+*Last updated: May 2026 — Phase 5.2 complete. AIOS shell operational: `AIOS> ` prompt, single-quoted tokenizer, 13 built-in commands (help/clear/echo/mem/ps/ls/cat/hexdump/load/ai/chat/reboot/shutdown), `shell_run` kthread launched from `kernel_main`. `load`/`ai`/`chat` are stubs awaiting Phase 7.6/7.9. `reboot` uses PS/2 reset pulse; `shutdown` uses QEMU ACPI port — both get clean ACPI paths at Phase 5.3. Next: Phase 5.3 (ACPI: RSDP → RSDT/XSDT → FADT → acpi_shutdown/acpi_reboot).*
