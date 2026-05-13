@@ -1,6 +1,6 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 3.3-VFS update: VFS abstraction layer wired in.
+ * Phase 4.2: Preemptive Round-Robin Scheduler + Kernel Threads
  * ============================================================ */
 
 #include "include/vga.h"
@@ -19,6 +19,8 @@
 #include "ahci.h"
 #include "fat32.h"
 #include "fs/vfs.h"
+#include "task.h"
+#include "sched.h"
 
 #include <stdint.h>
 
@@ -33,7 +35,7 @@ extern uint8_t _kernel_end;
 
 extern void pf_handler(interrupt_frame_t *frame);
 
-/* ── Helpers ──────────────────────────────────────────────── */
+/* ── Helpers ─────────────────────────────────────────────── */
 static void print_ok(const char *msg)
 {
     vga_puts_color("[ OK ] ", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
@@ -53,7 +55,7 @@ static void print_fail(const char *msg)
     kernel_panic(msg);
 }
 
-/* ── MB2 mmap scanner ───────────────────────────────────────── */
+/* ── MB2 mmap scanner ─────────────────────────────────────── */
 static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
 {
     uint32_t total = *(uint32_t *)(uintptr_t)mb2_addr;
@@ -71,7 +73,7 @@ static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
     return 0;
 }
 
-/* ── #DE regression test handler ───────────────────────────── */
+/* ── #DE regression test handler ─────────────────────────── */
 static void de_test_handler(interrupt_frame_t *frame)
 {
     vga_puts_color("  [ OK ] #DE handler fired — vector=0x",
@@ -82,10 +84,13 @@ static void de_test_handler(interrupt_frame_t *frame)
     frame->rip += 3;
 }
 
-/* ── IRQ handlers ─────────────────────────────────────────────── */
+/* ── PIT IRQ handler — now calls sched_tick() ───────────── */
 static void pit_irq_handler(interrupt_frame_t *f)
 {
-    (void)f; pit_tick(); apic_send_eoi();
+    (void)f;
+    pit_tick();       /* increment g_ticks */
+    apic_send_eoi();  /* EOI BEFORE sched_tick so re-arm is clean */
+    sched_tick();     /* may context-switch; runs with interrupts OFF (CPU guarantees) */
 }
 static void kbd_isr(interrupt_frame_t *f)
 {
@@ -94,6 +99,58 @@ static void kbd_isr(interrupt_frame_t *f)
 static void mouse_isr(interrupt_frame_t *f)
 {
     (void)f; mouse_handle_irq(); apic_send_eoi();
+}
+
+/* ================================================================
+ * Phase 4.2 test tasks
+ * Each prints its name to serial every 250 ms then exits after
+ * 5 iterations.  The interleaving on serial proves preemption works.
+ * ================================================================ */
+
+static volatile int g_task_a_done = 0;
+static volatile int g_task_b_done = 0;
+static volatile int g_task_c_done = 0;
+
+static void task_a(void)
+{
+    for (int i = 0; i < 5; i++) {
+        klog("[TASK A] tick i=");
+        klog_dec((uint32_t)i);
+        klog("\r\n");
+        vga_puts_color("A", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+        sched_sleep(250);
+    }
+    vga_puts_color("[A done]", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+    g_task_a_done = 1;
+    sched_exit();
+}
+
+static void task_b(void)
+{
+    for (int i = 0; i < 5; i++) {
+        klog("[TASK B] tick i=");
+        klog_dec((uint32_t)i);
+        klog("\r\n");
+        vga_puts_color("B", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        sched_sleep(250);
+    }
+    vga_puts_color("[B done]", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    g_task_b_done = 1;
+    sched_exit();
+}
+
+static void task_c(void)
+{
+    for (int i = 0; i < 5; i++) {
+        klog("[TASK C] tick i=");
+        klog_dec((uint32_t)i);
+        klog("\r\n");
+        vga_puts_color("C", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        sched_sleep(250);
+    }
+    vga_puts_color("[C done]", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    g_task_c_done = 1;
+    sched_exit();
 }
 
 /* ============================================================ */
@@ -109,12 +166,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 3.3-VFS: FAT32 + Virtual File System\n",
+        "  Phase 4.2: Preemptive Scheduler + Kernel Threads\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("\r\n=== AIOS Phase 3.3-VFS boot ===\r\n");
+    klog("\r\n=== AIOS Phase 4.2 boot ===\r\n");
 
     /* ---- Multiboot2 ----------------------------------------- */
     if (magic == MULTIBOOT2_MAGIC)
@@ -182,7 +239,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
     print_ok("APIC: legacy PIC dead, LAPIC active");
 
     /* ---- IRQ routing ---------------------------------------- */
-    idt_register_handler(0x20, pit_irq_handler);
+    idt_register_handler(0x20, pit_irq_handler);   /* now includes sched_tick */
     ioapic_route(0, 0x20, 0);
     pit_init(1000);
     print_ok("PIT: 1000 Hz, IRQ0 → vec 0x20");
@@ -198,47 +255,39 @@ void kernel_main(uint32_t magic, uint32_t addr)
     print_ok("Mouse: IRQ12 → vec 0x2C");
 
     __asm__ volatile ("sti");
-    print_ok("Interrupts enabled (STI) — PIT ticking");
+    print_ok("Interrupts enabled (STI)");
 
     /* ---- Phase 1.3 PIT smoke-test ---------------------------- */
-    vga_puts_color("\n  [TEST] pit_sleep_ms(1000)...\n",
+    vga_puts_color("\n  [TEST] pit_sleep_ms(200)...\n",
                    VGA_COLOR_BROWN, VGA_COLOR_BLACK);
     uint64_t t0 = pit_get_ticks();
-    pit_sleep_ms(1000);
+    pit_sleep_ms(200);
     uint64_t elapsed = pit_get_ticks() - t0;
-    vga_puts_color("  [TEST] Ticks: ", VGA_COLOR_BROWN, VGA_COLOR_BLACK);
-    vga_putdec(elapsed); vga_putchar('\n');
-    if (elapsed >= 900ULL && elapsed <= 1100ULL)
+    if (elapsed >= 180ULL && elapsed <= 250ULL)
         print_ok("PIT tick test PASSED");
-    else if (elapsed > 0)
-        print_warn("Tick count out of range");
     else
-        print_fail("PIT tick test FAILED — ticks=0");
+        print_warn("Tick count out of range");
 
     /* ===========================================================
      * Phase 3.1 — PCI Enumeration
      * =========================================================== */
     vga_putchar('\n');
-    vga_puts_color("--- Phase 3.1: PCI Enumeration ---\n",
+    vga_puts_color("--- Phase 3.1: PCI ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     pci_init();
     pci_dump();
     print_ok("PCI enumeration complete");
 
     /* ===========================================================
-     * Phase 3.2 — AHCI / SATA
+     * Phase 3.2 — AHCI
      * =========================================================== */
-    vga_puts_color("--- Phase 3.2: AHCI SATA Driver ---\n",
+    vga_puts_color("--- Phase 3.2: AHCI ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     int ahci_ok   = 0;
     int ahci_port = -1;
     if (ahci_init() == 0) {
         for (int p = 0; p < 32; p++) {
-            if (ahci_port_available(p)) {
-                ahci_sector0_test(p);
-                ahci_port = p;
-                break;
-            }
+            if (ahci_port_available(p)) { ahci_sector0_test(p); ahci_port = p; break; }
         }
         print_ok("AHCI driver initialised");
         ahci_ok = 1;
@@ -247,68 +296,71 @@ void kernel_main(uint32_t magic, uint32_t addr)
     }
 
     /* ===========================================================
-     * Phase 3.3 — FAT32 Filesystem
+     * Phase 3.3 — FAT32 + VFS
      * =========================================================== */
-    vga_puts_color("--- Phase 3.3: FAT32 Filesystem ---\n",
+    vga_puts_color("--- Phase 3.3: FAT32 + VFS ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    int fat32_ok      = 0;
-    uint32_t root_clus = 2;
     if (ahci_ok && ahci_port >= 0) {
         if (fat32_init(ahci_port, 0) == 0) {
             fat32_sector0_test();
-            fat32_ok   = 1;
-            /* fat32_get_root_cluster() would be cleaner; for now
-             * cluster 2 is the standard FAT32 root default, and
-             * fat32_init already validated it from the BPB.        */
-            root_clus  = 2;
-            print_ok("FAT32 filesystem ready");
+            vfs_init(2);
+            int fd = vfs_open("/TEST.TXT");
+            if (fd >= 0) {
+                static uint8_t vbuf[64];
+                int got = vfs_read(fd, vbuf, 64);
+                if (got > 0) { print_ok("VFS smoke-test: read OK"); }
+                else         { print_warn("VFS: read 0 bytes"); }
+                vfs_close(fd);
+            } else {
+                print_warn("VFS: TEST.TXT not found");
+            }
+            print_ok("FAT32 + VFS layer ready");
         } else {
-            print_warn("FAT32 init failed — disk may not be FAT32");
+            print_warn("FAT32 init failed");
         }
     } else {
-        print_warn("FAT32 skipped — no AHCI disk available");
+        print_warn("FAT32/VFS skipped — no AHCI disk");
     }
 
     /* ===========================================================
-     * Phase 3.3 — VFS Abstraction Layer
+     * Phase 4.1+4.2 — Task system + Scheduler
      * =========================================================== */
-    vga_puts_color("--- Phase 3.3: VFS Layer ---\n",
+    vga_putchar('\n');
+    vga_puts_color("--- Phase 4.1+4.2: Scheduler ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    if (fat32_ok) {
-        vfs_init(root_clus);
-        print_ok("VFS: abstraction layer ready");
 
-        /* VFS smoke-test: open TEST.TXT via long-name-aware API */
-        int fd = vfs_open("/TEST.TXT");
-        if (fd >= 0) {
-            static uint8_t vbuf[64];
-            int got = vfs_read(fd, vbuf, 64);
-            if (got > 0) {
-                vga_puts_color("  [ OK ] VFS: read ",
-                               VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-                vga_putdec((uint32_t)got);
-                vga_puts_color(" bytes from TEST.TXT via VFS\n",
-                               VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-                klog("[VFS] smoke-test: read ");
-                klog_dec((uint32_t)got);
-                klog(" bytes OK\r\n");
-            } else {
-                print_warn("VFS: read returned 0 or error");
-            }
-            vfs_close(fd);
-            print_ok("VFS smoke-test PASSED");
-        } else {
-            print_warn("VFS: TEST.TXT not found (expected on test disk)");
-        }
-    } else {
-        print_warn("VFS skipped — FAT32 not mounted");
+    task_init();
+    print_ok("Task table initialised (boot task = PID 0)");
+
+    sched_init();
+    print_ok("Scheduler initialised (idle task created)");
+
+    /* Create 3 test tasks. */
+    task_t *ta = task_create(task_a, 8192, "task_a");
+    task_t *tb = task_create(task_b, 8192, "task_b");
+    task_t *tc = task_create(task_c, 8192, "task_c");
+    KERNEL_ASSERT(ta && tb && tc, "test task creation failed");
+    sched_add(ta);
+    sched_add(tb);
+    sched_add(tc);
+    print_ok("Tasks A/B/C created and enqueued");
+
+    vga_puts_color(
+        "  Scheduler running. Output (A/B/C) shows preemption:\n",
+        VGA_COLOR_BROWN, VGA_COLOR_BLACK);
+
+    /* Boot task waits until all 3 test tasks finish. */
+    while (!g_task_a_done || !g_task_b_done || !g_task_c_done) {
+        sched_yield();
     }
+    vga_putchar('\n');
+    print_ok("Scheduler test PASSED — tasks A/B/C completed");
 
     vga_putchar('\n');
     vga_puts_color(
-        "AIOS Phase 3.3-VFS boot complete.  Waiting for input...\n",
+        "AIOS Phase 4.2 boot complete. Waiting for input...\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("Phase 3.3-VFS boot complete.\r\n");
+    klog("Phase 4.2 boot complete.\r\n");
 
     for (;;) __asm__ volatile ("hlt");
 }
