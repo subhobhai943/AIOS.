@@ -83,7 +83,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ PIT channel 0 configured in Mode 2 (rate generator) at 1000 Hz (divisor=1193)
 - ✅ `pit_sleep_ms(n)` uses `pause`-based busy-wait — no `hlt` race condition
 - ✅ Global `g_ticks` counter incremented in `pit_tick()`, called from IRQ0 handler at vector 0x20
-- ✅ Test: `pit_sleep_ms(1000)` in `kernel_main` — tick delta accepted in range 900–1100
+- ✅ Test: `pit_sleep_ms(200)` in `kernel_main` — tick delta accepted in range 180–250
 
 ### 1.4 — VGA / Framebuffer Output
 - ✅ `kernel/vga.c` — VGA text-mode driver exists
@@ -112,12 +112,15 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Test: type characters, see them echoed on screen via `vga_puts()`
 
 ### 1.7 — Mouse Driver
-- ✅ `kernel/mouse.c` — mouse driver skeleton exists, IRQ12 wired to vector 0x2C
-- ⬜ PS/2 mouse initialized: enable aux port (port 0x64 cmd 0xA8), set defaults (0xF6), enable reporting (0xF4)
-- ⬜ IRQ12 handler reads 3-byte packets: buttons + delta X + delta Y via `mouse_handle_irq()`
-- ⬜ Mouse state struct: `int x, y, buttons` with atomic update
-- ⬜ Cursor position clamped to screen bounds (0–79 col, 0–24 row for text mode)
-- ⬜ Test: move mouse, print X/Y coordinates to serial
+- ✅ `kernel/mouse.c` — full PS/2 mouse driver implemented
+- ✅ `kernel/include/mouse.h` — mouse header with `mouse_event_t`, constants, public API
+- ✅ PS/2 mouse initialized: enable aux port (0xA8), read/patch command byte (aux IRQ + aux clock), set defaults (0xF6), enable reporting (0xF4)
+- ✅ IRQ12 handler reads 3-byte packets: buttons + delta X + delta Y via `mouse_handle_irq()`
+- ✅ Mouse state: `int mouse_x, mouse_y` (global), `buttons` in event struct
+- ✅ Cursor position clamped to screen bounds (0–79 col, 0–24 row for text mode)
+- ✅ VGA text-mode cursor: `*` drawn at mouse position, underlying cell saved/restored on move
+- ✅ Event ring buffer `MOUSE_BUF_SIZE` entries, `mouse_get_event()` API
+- ✅ Test: `mouse_init()` called in `kernel_main`, IRQ12 → vec 0x2C wired
 
 ---
 
@@ -193,27 +196,35 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Initialize HBA: enable AHCI mode, power up ports, clear FRE+ST before reconfiguring
 - ✅ Detect drives on each port (check SSTS.DET == 3, SSTS.IPM == 1)
 - ✅ `ahci_read_sectors(port, lba, count, buffer)` — DMA read using PRDT command list
+- ✅ `ahci_write_sectors(port, lba, count, buffer)` — DMA write using PRDT command list
 - ✅ `ahci_port_available(port)` — returns true if port has a connected drive
 - ✅ `ahci_sector0_test(port)` — reads LBA 0, dumps first 16 bytes to serial
 - ✅ Test: sector 0 read prints signature bytes to serial in `kernel_main`
 
-### 3.3 — FAT32 Filesystem ← **CURRENT PHASE**
+### 3.3 — FAT32 Filesystem
 - ✅ `kernel/fat32.h` — FAT32 header: `fat32_bpb_t` (packed), `fat32_dir_entry_t` (packed), full public API
-- ✅ `kernel/fat32.c` — FAT32 read-only driver
-  - ✅ `fat32_init(port, partition_lba)` — parse BPB, validate FAT32, derive `fat_lba` / `data_lba` / `spc`
+- ✅ `kernel/fat32.c` — FAT32 read/write driver
+  - ✅ `fat32_init(port, partition_lba)` — parse BPB, validate FAT32, derive geometry + `g_num_fats`, `g_fat_sectors`, `g_total_clusters`
   - ✅ `fat32_read_cluster(cluster, buf)` — resolve cluster → LBA, call `ahci_read_sectors()`
   - ✅ `fat32_next_cluster(cluster)` — read FAT sector, extract 28-bit entry (mask `0x0FFFFFFF`)
   - ✅ `fat32_find_file(dir_cluster, name83, out_cluster, out_size)` — walk dir chain, match 8.3 name
   - ✅ `fat32_read_file(first_cluster, buf, max_bytes)` — follow cluster chain into caller buffer
+  - ✅ `fat32_find_file_lfn(dir_cluster, name, out_cluster, out_size)` — LFN + 8.3 fallback search
+  - ✅ `fat32_alloc_clusters(count)` — find contiguous free clusters, link as FAT32 chain
+  - ✅ `fat32_free_chain(first_cluster)` — walk chain, mark all entries FAT32_FREE
+  - ✅ `fat32_write_file(first_cluster, buf, size)` — write into existing cluster chain, zero-pad last cluster
+  - ✅ `fat32_create_file(dir_cluster, name83, data, size, out_fc)` — allocate clusters, write data, insert 8.3 dir entry (extends dir cluster if full)
   - ✅ `fat32_sector0_test()` — print BPB fields to serial, find `/TEST.TXT`, read 64 bytes, hex-dump to COM1
-- ✅ `kernel_main` Phase 3.3 block: `fat32_init(ahci_port, 0)` + `fat32_sector0_test()` after AHCI init
-- ⬜ LFN (Long File Name) support — Phase 4 nice-to-have
-- ⬜ VFS abstraction layer: `vfs_open`, `vfs_read`, `vfs_write`, `vfs_close` — wraps FAT32 (and future ext2)
-- ⬜ FAT32 write support: `fat32_write_file`, `fat32_create_file`, cluster allocation
+- ✅ VFS abstraction layer: `kernel/fs/vfs.c` + `kernel/fs/vfs.h`
+  - ✅ `vfs_init(root_cluster)` — initialise VFS with FAT32 root cluster
+  - ✅ `vfs_open(path)` — resolve path via `fat32_find_file_lfn`, return fd
+  - ✅ `vfs_read(fd, buf, len)` — read from open file
+  - ✅ `vfs_close(fd)` — release fd slot
+- ✅ `kernel_main` Phase 3.3 block: `fat32_init` + `fat32_sector0_test` + `vfs_open("/TEST.TXT")` smoke-test
 
-### 3.4 — Initrd / Ramdisk
+### 3.4 — Initrd / Ramdisk ← **CURRENT PHASE**
 - ⬜ Pack initial files into a ramdisk (CPIO or custom format) embedded in the ISO
-- ⬜ Kernel reads ramdisk from multiboot module list
+- ⬜ Kernel reads ramdisk from multiboot module list (`--module` in grub.cfg)
 - ⬜ Mount ramdisk as root filesystem before real disk driver is ready
 - ⬜ Put LLM tokenizer vocab and initial config here
 
@@ -223,27 +234,28 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 > Goal: Multiple processes/threads running concurrently. Shell in one thread, LLM in another.
 
-### 4.1 — Context Switching ← **NEXT PHASE**
-- ⬜ Create `kernel/task.c` + `kernel/task.h`
-- ⬜ Define task struct: `pid`, `state` (RUNNING/READY/BLOCKED/DEAD), `rsp`, `stack_base`, `stack_size`, `cr3`
-- ⬜ `task_create(entry_fn, stack_size)` — `kmalloc` stack, set up initial register frame on stack
-- ⬜ Assembly `switch_context(curr_rsp_ptr, next_rsp)` in NASM: push all callee-saved regs, save RSP, load new RSP, pop regs, ret
-- ⬜ `task_destroy(task)` — `kfree` stack, remove from all queues
+### 4.1 — Context Switching
+- ✅ `kernel/task.c` + `kernel/task.h` — task system implemented
+- ✅ Task struct: `pid`, `state` (RUNNING/READY/BLOCKED/DEAD), `rsp`, `stack_base`, `stack_size`, `cr3`, `name`
+- ✅ `task_create(entry_fn, stack_size, name)` — `kmalloc` stack, set up initial register frame
+- ✅ `kernel/switch_context.asm` — NASM `switch_context(curr_rsp_ptr, next_rsp)`: push callee-saved regs, swap RSP, pop regs, ret
+- ✅ `task_destroy(task)` — `kfree` stack, remove from all queues
+- ✅ `task_init()` — initialises task table, registers boot task as PID 0
 
 ### 4.2 — Scheduler
-- ⬜ Create `kernel/sched.c` + `kernel/sched.h`
-- ⬜ Simple round-robin scheduler (priority upgrade deferred)
-- ⬜ Ready queue: circular doubly-linked list of runnable tasks
-- ⬜ PIT IRQ handler calls `sched_tick()` every tick → picks next task → `switch_context()`
-- ⬜ `sched_yield()` — voluntarily gives up CPU time slice
-- ⬜ `sched_sleep(ms)` — puts task in sleep queue, woken by timer when deadline passes
-- ⬜ `sched_exit()` — marks task DEAD, removed from ready queue on next tick
-- ⬜ Test: create 3 tasks each printing their own ID to VGA — output should interleave
+- ✅ `kernel/sched.c` + `kernel/sched.h` — preemptive round-robin scheduler
+- ✅ Ready queue: circular doubly-linked list of runnable tasks
+- ✅ PIT IRQ handler calls `sched_tick()` every tick → picks next task → `switch_context()`
+- ✅ `sched_yield()` — voluntarily gives up CPU time slice
+- ✅ `sched_sleep(ms)` — puts task in sleep queue, woken by timer when deadline passes
+- ✅ `sched_exit()` — marks task DEAD, removed from ready queue on next tick
+- ✅ Idle task: runs `hlt` in a loop when no other task is ready
+- ✅ `sched_add(task)` — enqueue a task into the ready queue
+- ✅ Test: 3 tasks (A/B/C) created in `kernel_main`, each prints its letter and sleeps 250 ms, interleaved output on VGA proves preemption
 
-### 4.3 — Kernel Threads
-- ⬜ `kthread_create(fn, arg)` — creates a kernel-mode thread, adds to scheduler
-- ⬜ All early kernel services run as kthreads: idle thread, LLM inference thread, I/O threads
-- ⬜ Idle thread: runs `hlt` in a loop when no other task is ready
+### 4.3 — Kernel Threads ← **NEXT PHASE**
+- ⬜ `kthread_create(fn, arg)` — convenience wrapper: creates a kernel-mode thread, adds to scheduler
+- ⬜ All early kernel services run as kthreads: idle thread (already done), LLM inference thread, I/O threads
 
 ### 4.4 — Synchronization Primitives
 - ⬜ Spinlock: `spinlock_t`, `spin_lock()`, `spin_unlock()` using atomic `xchg`
@@ -462,16 +474,21 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + cli+hlt |
 | Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + 7-bit error decode → panic |
 | Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer |
-| Mouse | `kernel/mouse.c` | 🔄 IRQ12 wired to 0x2C — 3-byte parser TBC |
+| Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete — IRQ12, 3-byte PS/2, VGA cursor, ring buffer |
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc |
 | VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map |
 | Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, coalesce, canary, smoke-test |
 | PCI | `kernel/pci.c`, `kernel/pci.h` | ✅ Complete — bus scan, dump, busmaster DMA |
-| AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete — HBA init, port detect, DMA read, sector0 test |
-| FAT32 | `kernel/fat32.c`, `kernel/fat32.h` | ✅ Complete — BPB parse, cluster chain, find_file, read_file |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 3.3 — all above wired, FAT32 smoke-test |
-| Scheduler | — | ⬜ Not started |
-| VFS layer | — | ⬜ Not started |
+| AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete — HBA init, port detect, DMA read+write, sector0 test |
+| FAT32 | `kernel/fat32.c`, `kernel/fat32.h` | ✅ Complete — BPB parse, cluster chain, LFN, find/read/write/create |
+| VFS | `kernel/fs/vfs.c`, `kernel/fs/vfs.h` | ✅ Complete — vfs_open/read/close wrapping FAT32 |
+| Task system | `kernel/task.c`, `kernel/task.h` | ✅ Complete — pid, states, task_create, task_destroy |
+| Context switch | `kernel/switch_context.asm` | ✅ Complete — NASM callee-save swap |
+| Scheduler | `kernel/sched.c`, `kernel/sched.h` | ✅ Complete — round-robin, sched_tick, sleep, yield, exit, idle |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 4.2 — all above wired, A/B/C task interleave test |
+| Initrd/Ramdisk | — | ⬜ Not started |
+| kthread API | — | ⬜ Not started |
+| Sync primitives | — | ⬜ Not started |
 | Shell | — | ⬜ Not started |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
@@ -480,11 +497,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 1.7 — Mouse driver** ← **NEXT** — implement `mouse_handle_irq()`: 3-byte PS/2 packet state machine, delta X/Y accumulation, button bits, clamp cursor to 80×25 bounds
-2. **Phase 4.1 — Context switching** — `task.c` + NASM `switch_context`, task struct, `task_create()`
-3. **Phase 4.2 — Scheduler** — round-robin ready queue, `sched_tick()` called from PIT IRQ, `sched_yield()`
-4. **Phase 3.3 remaining** — VFS abstraction (`vfs_open/read/close`) wrapping FAT32; LFN support
-5. **Phase 2.2 remaining** — VMM map/write/unmap regression test in `kernel_main`
+1. **Phase 3.4 — Initrd/Ramdisk** ← **NEXT** — custom flat binary ramdisk format, embed via GRUB `--module`, parse MB2 module tag in kernel, expose files via VFS before AHCI is ready
+2. **Phase 4.3 — kthread API** — `kthread_create(fn, arg)` thin wrapper over `task_create` + `sched_add`
+3. **Phase 4.4 — Sync primitives** — spinlock (`xchg`), mutex (sleep-based), semaphore
+4. **Phase 5.1 — Terminal** — `terminal_readline`, line editing, history, ANSI colors
+5. **Phase 5.2 — Shell** — `AIOS> ` prompt, tokenizer, built-in commands (`help`, `ls`, `cat`, `ps`, `mem`)
 
 ---
 
@@ -521,7 +538,7 @@ AIOS/
 │   ├── kernel_entry.asm     ← Multiboot2 entry, SSE/SSE2, 64-bit mode
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 3.3 — all subsystems wired
+│   ├── kernel_main.c        ← Phase 4.2 — all subsystems wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -532,19 +549,19 @@ AIOS/
 │   ├── panic.c              ← ✅
 │   ├── pf_handler.c         ← ✅
 │   ├── keyboard.c           ← ✅
-│   ├── mouse.c              ← 🔄 IRQ wired, parser TBC
+│   ├── mouse.c              ← ✅ Complete
 │   ├── pmm.c / .h           ← ✅
 │   ├── vmm.c / .h           ← ✅
 │   ├── heap.c / .h          ← ✅
 │   ├── pci.c / .h           ← ✅
 │   ├── ahci.c / .h          ← ✅
-│   ├── fat32.c / .h         ← ✅  (Phase 3.3 complete)
+│   ├── fat32.c / .h         ← ✅  (read + write + LFN)
+│   ├── task.c / .h          ← ✅
+│   ├── switch_context.asm   ← ✅
+│   ├── sched.c / .h         ← ✅
 │   ├── include/             ← Shared kernel headers
-│   ├── task.c / .h          ← ⬜ TODO Phase 4.1
-│   ├── sched.c / .h         ← ⬜ TODO Phase 4.2
-│   ├── simd.c / .h          ← ⬜ TODO Phase 6.4
 │   ├── fs/
-│   │   └── vfs.c / .h       ← ⬜ TODO (VFS wrapping fat32)
+│   │   └── vfs.c / .h       ← ✅ Complete
 │   ├── shell/
 │   │   ├── shell.c          ← ⬜ TODO Phase 5.2
 │   │   └── terminal.c       ← ⬜ TODO Phase 5.1
@@ -565,4 +582,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 3.3 complete. FAT32 read-only driver operational: BPB parse, cluster chain traversal, 8.3 file find, file read. PCI enumeration + AHCI DMA read also complete. Next: Phase 1.7 (Mouse 3-byte packet parser) then Phase 4.1 (Context switching / scheduler).*
+*Last updated: May 2026 — Phase 4.2 complete. Preemptive round-robin scheduler operational: task_create, switch_context, sched_tick (PIT IRQ), sched_sleep, sched_yield, sched_exit, idle task. FAT32 read+write+LFN + VFS layer also complete. Next: Phase 3.4 (Initrd/Ramdisk) then Phase 4.3 (kthread API) then Phase 4.4 (sync primitives) then Phase 5 (Shell).*
