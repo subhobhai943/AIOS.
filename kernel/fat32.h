@@ -8,15 +8,15 @@
 /* ================================================================
  * AIOS — FAT32 Filesystem Driver  (Phase 3.3)
  *
- * Provides read-only access to a FAT32 volume stored on an AHCI
- * SATA disk.  Sufficient for loading LLM weight files from disk.
+ * Provides read/write access to a FAT32 volume stored on an AHCI
+ * SATA disk.  Sufficient for loading and storing LLM weight files.
  *
  * Assumptions:
  *   - Partition starts at LBA 0 (the volume BPB is at LBA 0).
  *     If a real partition table is used, call fat32_init_at_lba()
  *     with the partition start LBA instead.
  *   - Only FAT32 (OEM "FAT32   " in BPB or cluster count > 65525).
- *   - Short 8.3 filenames only (LFN deferred to Phase 4).
+ *   - Short 8.3 filenames only for writes (LFN read-only).
  *   - Single AHCI port (port index passed to fat32_init).
  *   - Sector size 512 bytes (asserted during init).
  * ================================================================ */
@@ -142,6 +142,42 @@ int  fat32_find_file(uint32_t dir_cluster,
  *   Returns the number of bytes actually read, or -1 on I/O error.
  */
 int  fat32_read_file(uint32_t first_cluster, void *buf, uint32_t max_bytes);
+
+/*
+ * fat32_alloc_clusters(count)
+ *   Allocate `count` contiguous free clusters and link them into
+ *   a FAT32 chain. Returns the first cluster index on success, or
+ *   0 on failure.
+ */
+uint32_t fat32_alloc_clusters(uint32_t count);
+
+/*
+ * fat32_free_chain(first_cluster)
+ *   Mark all clusters in the chain starting at `first_cluster`
+ *   as free in the FAT. Returns 0 on success, -1 on error.
+ */
+int  fat32_free_chain(uint32_t first_cluster);
+
+/*
+ * fat32_write_file(first_cluster, buf, size)
+ *   Overwrite the cluster chain starting at `first_cluster` with
+ *   `size` bytes from `buf`, zero-padding the final cluster.
+ *   Returns the number of bytes written, or -1 on error.
+ */
+int  fat32_write_file(uint32_t first_cluster, const void *buf, uint32_t size);
+
+/*
+ * fat32_create_file(dir_cluster, name83, data, size, out_first_cluster)
+ *   Create a new file with 8.3 name in the directory starting at
+ *   `dir_cluster`, allocate enough contiguous clusters to hold
+ *   `size` bytes, and write `data` if non-NULL. On success stores
+ *   the first data cluster in *out_first_cluster and returns 0.
+ */
+int  fat32_create_file(uint32_t dir_cluster,
+                       const char name83[11],
+                       const void *data,
+                       uint32_t size,
+                       uint32_t *out_first_cluster);
 
 /*
  * fat32_sector0_test()

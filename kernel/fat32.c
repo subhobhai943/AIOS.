@@ -1,9 +1,8 @@
 /* ================================================================
  * AIOS — FAT32 Filesystem Driver  (Phase 3.3)
  *
- * Read-only FAT32 driver.  Reads from AHCI disk using
- * ahci_read_sectors().  All sector I/O goes through static
- * 512-byte sector buffers (no dynamic allocation needed).
+ * Read/Write FAT32 driver.  All sector I/O goes through static
+ * 512-byte sector buffers via AHCI.
  *
  * Supported:
  *   - FAT32 volumes (BPB validated, cluster count sanity-checked)
@@ -11,9 +10,10 @@
  *   - Cluster chain traversal via FAT table
  *   - Read entire file into caller-supplied buffer
  *   - Long File Names (LFN / VFAT) — read-only search
+ *   - Write support: fat32_write_file, fat32_create_file,
+ *     fat32_alloc_clusters, fat32_free_chain
  *
  * Not yet supported (Phase 4):
- *   - Write / create / delete
  *   - Subdirectory traversal via path string
  *   - Partition table detection (always assumes partition_lba param)
  * ================================================================ */
@@ -35,6 +35,10 @@ static uint32_t g_root_cluster= 2;   /* first cluster of root dir   */
 static uint8_t  g_spc         = 1;   /* sectors per cluster         */
 static bool     g_ready       = false;
 
+static uint8_t  g_num_fats       = 0;   /* number of FAT copies         */
+static uint32_t g_fat_sectors    = 0;   /* sectors per FAT              */
+static uint32_t g_total_clusters = 0;   /* total data clusters on vol   */
+
 /* ─── Static I/O buffers ──────────────────────────────────── */
 /* One sector for BPB / FAT reads */
 static uint8_t  s_sector[512] __attribute__((aligned(512)));
@@ -45,6 +49,12 @@ static uint8_t  s_cluster_buf[128 * 512] __attribute__((aligned(512)));
 static int read_sector(uint64_t lba, void *buf)
 {
     return ahci_read_sectors(g_port, lba, 1, buf);
+}
+
+/* ─── Helper: write one absolute sector ───────────────────── */
+static int write_sector(uint64_t lba, const void *buf)
+{
+    return ahci_write_sectors(g_port, lba, 1, buf);
 }
 
 /* ─── Helper: memcpy (no libc) ───────────────────────────── */
@@ -109,9 +119,19 @@ int fat32_init(int ahci_port, uint64_t partition_lba)
     g_spc          = bpb->sectors_per_cluster;
     g_root_cluster = bpb->root_cluster;
     g_fat_lba      = (uint32_t)(partition_lba + bpb->reserved_sectors);
-    uint32_t fat_sectors = (uint32_t)bpb->num_fats * bpb->fat_size_32;
+    g_num_fats     = bpb->num_fats;
+    g_fat_sectors  = bpb->fat_size_32;
+
+    uint32_t fat_sectors = (uint32_t)g_num_fats * g_fat_sectors;
     g_data_lba     = g_fat_lba + fat_sectors;
     /* LBA(cluster N) = g_data_lba + (N - 2) * g_spc */
+
+    /* Compute total usable data clusters for allocation helpers. */
+    uint32_t total_sectors = (bpb->total_sectors_16 != 0)
+                             ? (uint32_t)bpb->total_sectors_16
+                             : bpb->total_sectors_32;
+    uint32_t data_sectors  = total_sectors - (bpb->reserved_sectors + fat_sectors);
+    g_total_clusters       = data_sectors / g_spc;
 
     g_ready = true;
 
@@ -184,16 +204,6 @@ int fat32_find_file(uint32_t dir_cluster,
             /* Skip volume-id entries */
             if (de->attr & FAT_ATTR_VOLUME_ID) continue;
 
-            /*
-             * FIX (Bug 2): fat32_dir_entry_t has name[8] and ext[3]
-             * as SEPARATE C arrays.  Accessing de->name[j] for j > 7
-             * is undefined behaviour — the compiler may assume j < 8
-             * and optimize aggressively.
-             *
-             * Build the 11-byte comparison key by reading name[0..7]
-             * and ext[0..2] through their own array bounds, then
-             * upper-casing each byte.
-             */
             char cmp[11];
             for (int j = 0; j < 8; j++)
                 cmp[j]     = to_upper(de->name[j]);
@@ -309,6 +319,263 @@ void fat32_sector0_test(void)
 
     vga_puts_color("  [ OK ] FAT32 read test PASSED\n",
                    VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+}
+
+/* ================================================================
+ * Cluster allocation and write support (Phase 3.3)
+ * ================================================================ */
+
+/* Read a single FAT32 entry (low 28 bits). Returns FAT32_BAD on I/O error. */
+static uint32_t fat32_read_fat_entry(uint32_t cluster)
+{
+    if (!g_ready || cluster < 2u) return FAT32_BAD;
+
+    /* 4 bytes per entry, 128 entries per 512-byte sector */
+    uint32_t fat_sector_offset = cluster / 128u;
+    uint32_t fat_entry_offset  = (cluster % 128u) * 4u;
+
+    uint64_t lba = (uint64_t)g_fat_lba + fat_sector_offset;
+    if (read_sector(lba, s_sector) != 0) {
+        return FAT32_BAD;
+    }
+
+    uint32_t entry;
+    memcpy_k(&entry, s_sector + fat_entry_offset, 4);
+    return entry & 0x0FFFFFFFu;
+}
+
+/* Write a single FAT32 entry (low 28 bits) to all FAT copies. */
+static int fat32_write_fat_entry(uint32_t cluster, uint32_t value)
+{
+    if (!g_ready || cluster < 2u) return -1;
+    if (g_num_fats == 0u || g_fat_sectors == 0u) return -1;
+
+    uint32_t fat_sector_offset = cluster / 128u;
+    uint32_t fat_entry_offset  = (cluster % 128u) * 4u;
+
+    /* Read sector from primary FAT. */
+    uint64_t lba0 = (uint64_t)g_fat_lba + fat_sector_offset;
+    if (read_sector(lba0, s_sector) != 0) return -1;
+
+    uint32_t newval = value & 0x0FFFFFFFu;
+    memcpy_k(s_sector + fat_entry_offset, &newval, 4);
+
+    /* Write updated sector to all FAT copies. */
+    for (uint32_t f = 0; f < (uint32_t)g_num_fats; f++) {
+        uint64_t lba = (uint64_t)g_fat_lba
+                     + (uint64_t)f * (uint64_t)g_fat_sectors
+                     + fat_sector_offset;
+        if (write_sector(lba, s_sector) != 0) return -1;
+    }
+    return 0;
+}
+
+/* Allocate `count` contiguous free clusters and link them as a chain. */
+static uint32_t fat32_alloc_contiguous(uint32_t count)
+{
+    if (!g_ready || count == 0u) return 0u;
+    if (g_total_clusters == 0u)  return 0u;
+
+    uint32_t run_start = 0u;
+    uint32_t run_len   = 0u;
+    uint32_t max_cluster = g_total_clusters + 1u; /* clusters numbered from 2 */
+
+    for (uint32_t c = 2u; c <= max_cluster; c++) {
+        uint32_t val  = fat32_read_fat_entry(c);
+        bool     free = (val == FAT32_FREE);
+        if (free) {
+            if (run_len == 0u) run_start = c;
+            run_len++;
+            if (run_len == count) {
+                /* Mark clusters as allocated and link chain. */
+                for (uint32_t i = 0u; i < count; i++) {
+                    uint32_t cur  = run_start + i;
+                    uint32_t next = (i + 1u < count)
+                                    ? (cur + 1u)
+                                    : FAT32_EOC_MIN; /* end-of-chain */
+                    if (fat32_write_fat_entry(cur, next) != 0) {
+                        /* On partial failure we may leak, acceptable for now. */
+                        return 0u;
+                    }
+                }
+                return run_start;
+            }
+        } else {
+            run_len = 0u;
+        }
+    }
+    return 0u;
+}
+
+/* Public wrapper for cluster allocation. */
+uint32_t fat32_alloc_clusters(uint32_t count)
+{
+    return fat32_alloc_contiguous(count);
+}
+
+/* Free an entire FAT32 cluster chain starting at first_cluster. */
+int fat32_free_chain(uint32_t first_cluster)
+{
+    if (!g_ready || first_cluster < 2u) return -1;
+
+    uint32_t cluster = first_cluster;
+    while (cluster >= 2u && cluster < FAT32_EOC_MIN) {
+        uint32_t next = fat32_next_cluster(cluster);
+        if (fat32_write_fat_entry(cluster, FAT32_FREE) != 0) {
+            return -1;
+        }
+        cluster = next;
+    }
+    return 0;
+}
+
+/* Write an entire cluster from caller buffer. */
+static int fat32_write_cluster(uint32_t cluster, const void *buf)
+{
+    if (!g_ready || cluster < 2u) return -1;
+    uint64_t lba = (uint64_t)g_data_lba
+                 + (uint64_t)(cluster - 2u) * g_spc;
+    return ahci_write_sectors(g_port, lba, g_spc, buf);
+}
+
+/* Zero-fill a cluster on disk. */
+static int fat32_clear_cluster(uint32_t cluster)
+{
+    uint32_t bytes = (uint32_t)g_spc * 512u;
+    for (uint32_t i = 0u; i < bytes; i++) {
+        s_cluster_buf[i] = 0u;
+    }
+    return fat32_write_cluster(cluster, s_cluster_buf);
+}
+
+/* Write `size` bytes from buf into an existing cluster chain. */
+int fat32_write_file(uint32_t first_cluster, const void *buf, uint32_t size)
+{
+    if (!g_ready || !buf || size == 0u) return -1;
+
+    uint32_t cluster_bytes = (uint32_t)g_spc * 512u;
+    uint32_t cluster       = first_cluster;
+    uint32_t written       = 0u;
+
+    while (cluster >= 2u && cluster < FAT32_EOC_MIN && written < size) {
+        uint32_t chunk = size - written;
+        if (chunk > cluster_bytes) chunk = cluster_bytes;
+
+        /* Copy chunk bytes, pad remainder of cluster with zeroes. */
+        const uint8_t *src = (const uint8_t *)buf + written;
+        uint32_t i = 0u;
+        for (; i < chunk; i++) {
+            s_cluster_buf[i] = src[i];
+        }
+        for (; i < cluster_bytes; i++) {
+            s_cluster_buf[i] = 0u;
+        }
+
+        if (fat32_write_cluster(cluster, s_cluster_buf) != 0) {
+            return -1;
+        }
+
+        written += chunk;
+        if (written >= size) break;
+        cluster = fat32_next_cluster(cluster);
+    }
+
+    return (written > 0u) ? (int)written : -1;
+}
+
+/* Create a new file with 8.3 name in a directory and optionally write data. */
+int fat32_create_file(uint32_t dir_cluster,
+                      const char name83[11],
+                      const void *data,
+                      uint32_t size,
+                      uint32_t *out_first_cluster)
+{
+    if (!g_ready || dir_cluster < 2u || !name83 || !out_first_cluster) return -1;
+
+    uint32_t cluster_bytes   = (uint32_t)g_spc * 512u;
+    uint32_t needed_clusters = (size + cluster_bytes - 1u) / cluster_bytes;
+    if (needed_clusters == 0u) needed_clusters = 1u;  /* avoid zero-cluster files */
+
+    /* Allocate contiguous data clusters. */
+    uint32_t first_cluster = fat32_alloc_contiguous(needed_clusters);
+    if (first_cluster == 0u) return -1;
+
+    /* Write file data or clear clusters. */
+    if (data && size > 0u) {
+        if (fat32_write_file(first_cluster, data, size) != (int)size) {
+            return -1;
+        }
+    } else {
+        uint32_t c = first_cluster;
+        for (uint32_t i = 0u; i < needed_clusters; i++) {
+            if (fat32_clear_cluster(c) != 0) return -1;
+            if (i + 1u < needed_clusters) c = c + 1u; /* contiguous */
+        }
+    }
+
+    /* Find free directory entry slot, extending directory if needed. */
+    uint32_t cluster = dir_cluster;
+    uint32_t last_cluster = 0u;
+    uint32_t dir_bytes_per_cluster = cluster_bytes;
+
+    while (cluster >= 2u && cluster < FAT32_EOC_MIN) {
+        if (fat32_read_cluster(cluster, s_cluster_buf) != 0) return -1;
+
+        fat32_dir_entry_t *de = (fat32_dir_entry_t *)s_cluster_buf;
+        int entries = (int)(dir_bytes_per_cluster / (uint32_t)sizeof(fat32_dir_entry_t));
+        for (int i = 0; i < entries; i++, de++) {
+            uint8_t first = (uint8_t)de->name[0];
+            if (first == 0x00u || first == 0xE5u) {
+                /* Free slot. Zero entry then populate. */
+                for (size_t j = 0; j < sizeof(fat32_dir_entry_t); j++) {
+                    ((uint8_t *)de)[j] = 0u;
+                }
+                for (int j = 0; j < 8; j++)  de->name[j] = name83[j];
+                for (int j = 0; j < 3; j++)  de->ext[j]  = name83[8 + j];
+                de->attr             = FAT_ATTR_ARCHIVE;
+                de->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFFu);
+                de->first_cluster_hi = (uint16_t)(first_cluster >> 16);
+                de->file_size        = size;
+
+                if (fat32_write_cluster(cluster, s_cluster_buf) != 0) {
+                    return -1;
+                }
+                *out_first_cluster = first_cluster;
+                return 0;
+            }
+        }
+
+        last_cluster = cluster;
+        cluster      = fat32_next_cluster(cluster);
+    }
+
+    /* Need to extend directory by one cluster. */
+    uint32_t new_dir_cluster = fat32_alloc_contiguous(1u);
+    if (new_dir_cluster == 0u) return -1;
+
+    if (last_cluster >= 2u) {
+        if (fat32_write_fat_entry(last_cluster, new_dir_cluster) != 0) {
+            return -1;
+        }
+    }
+
+    if (fat32_clear_cluster(new_dir_cluster) != 0) return -1;
+
+    fat32_dir_entry_t *de = (fat32_dir_entry_t *)s_cluster_buf;
+    for (size_t j = 0; j < sizeof(fat32_dir_entry_t); j++) {
+        ((uint8_t *)de)[j] = 0u;
+    }
+    for (int j = 0; j < 8; j++)  de->name[j] = name83[j];
+    for (int j = 0; j < 3; j++)  de->ext[j]  = name83[8 + j];
+    de->attr             = FAT_ATTR_ARCHIVE;
+    de->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFFu);
+    de->first_cluster_hi = (uint16_t)(first_cluster >> 16);
+    de->file_size        = size;
+
+    if (fat32_write_cluster(new_dir_cluster, s_cluster_buf) != 0) return -1;
+
+    *out_first_cluster = first_cluster;
+    return 0;
 }
 
 /* ================================================================
