@@ -1,0 +1,4 @@
+VOCAB_PLACEHOLDER_v1
+# This file will be replaced with a real BPE vocabulary in Phase 7.7.
+# Format will be:  4-byte token_id (LE uint32) | 2-byte len | len bytes of text
+# One record per line until the binary format is finalized.

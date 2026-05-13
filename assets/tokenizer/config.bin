@@ -1,0 +1,4 @@
+AIOS_LLM_CONFIG_v1
+vocab_size=50257
+model_type=gpt2
+max_seq_len=1024
