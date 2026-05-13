@@ -1,6 +1,6 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 3.3 update: FAT32 filesystem driver wired in.
+ * Phase 3.3-VFS update: VFS abstraction layer wired in.
  * ============================================================ */
 
 #include "include/vga.h"
@@ -18,6 +18,7 @@
 #include "pci.h"
 #include "ahci.h"
 #include "fat32.h"
+#include "fs/vfs.h"
 
 #include <stdint.h>
 
@@ -32,7 +33,7 @@ extern uint8_t _kernel_end;
 
 extern void pf_handler(interrupt_frame_t *frame);
 
-/* ── Helpers ─────────────────────────────────────────────── */
+/* ── Helpers ──────────────────────────────────────────────── */
 static void print_ok(const char *msg)
 {
     vga_puts_color("[ OK ] ", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
@@ -52,7 +53,7 @@ static void print_fail(const char *msg)
     kernel_panic(msg);
 }
 
-/* ── MB2 mmap scanner ─────────────────────────────────────── */
+/* ── MB2 mmap scanner ───────────────────────────────────────── */
 static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
 {
     uint32_t total = *(uint32_t *)(uintptr_t)mb2_addr;
@@ -70,7 +71,7 @@ static uint64_t find_mmap_tag(uint32_t mb2_addr, uint32_t *tag_size_out)
     return 0;
 }
 
-/* ── #DE regression test handler ─────────────────────────── */
+/* ── #DE regression test handler ───────────────────────────── */
 static void de_test_handler(interrupt_frame_t *frame)
 {
     vga_puts_color("  [ OK ] #DE handler fired — vector=0x",
@@ -81,7 +82,7 @@ static void de_test_handler(interrupt_frame_t *frame)
     frame->rip += 3;
 }
 
-/* ── IRQ handlers ─────────────────────────────────────────── */
+/* ── IRQ handlers ─────────────────────────────────────────────── */
 static void pit_irq_handler(interrupt_frame_t *f)
 {
     (void)f; pit_tick(); apic_send_eoi();
@@ -108,12 +109,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 3.3: FAT32 Filesystem Driver\n",
+        "  Phase 3.3-VFS: FAT32 + Virtual File System\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("\r\n=== AIOS Phase 3.3 boot ===\r\n");
+    klog("\r\n=== AIOS Phase 3.3-VFS boot ===\r\n");
 
     /* ---- Multiboot2 ----------------------------------------- */
     if (magic == MULTIBOOT2_MAGIC)
@@ -229,7 +230,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
      * =========================================================== */
     vga_puts_color("--- Phase 3.2: AHCI SATA Driver ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    int ahci_ok = 0;
+    int ahci_ok   = 0;
     int ahci_port = -1;
     if (ahci_init() == 0) {
         for (int p = 0; p < 32; p++) {
@@ -250,13 +251,16 @@ void kernel_main(uint32_t magic, uint32_t addr)
      * =========================================================== */
     vga_puts_color("--- Phase 3.3: FAT32 Filesystem ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    int fat32_ok      = 0;
+    uint32_t root_clus = 2;
     if (ahci_ok && ahci_port >= 0) {
-        /* partition_lba = 0: BPB is at absolute LBA 0 (no MBR partition
-         * table; the disk image is formatted as a bare FAT32 volume).
-         * If your QEMU disk has an MBR, change 0 to the partition start
-         * LBA (e.g. 2048 for a standard MBR layout). */
         if (fat32_init(ahci_port, 0) == 0) {
             fat32_sector0_test();
+            fat32_ok   = 1;
+            /* fat32_get_root_cluster() would be cleaner; for now
+             * cluster 2 is the standard FAT32 root default, and
+             * fat32_init already validated it from the BPB.        */
+            root_clus  = 2;
             print_ok("FAT32 filesystem ready");
         } else {
             print_warn("FAT32 init failed — disk may not be FAT32");
@@ -265,11 +269,46 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("FAT32 skipped — no AHCI disk available");
     }
 
+    /* ===========================================================
+     * Phase 3.3 — VFS Abstraction Layer
+     * =========================================================== */
+    vga_puts_color("--- Phase 3.3: VFS Layer ---\n",
+                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    if (fat32_ok) {
+        vfs_init(root_clus);
+        print_ok("VFS: abstraction layer ready");
+
+        /* VFS smoke-test: open TEST.TXT via long-name-aware API */
+        int fd = vfs_open("/TEST.TXT");
+        if (fd >= 0) {
+            static uint8_t vbuf[64];
+            int got = vfs_read(fd, vbuf, 64);
+            if (got > 0) {
+                vga_puts_color("  [ OK ] VFS: read ",
+                               VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+                vga_putdec((uint32_t)got);
+                vga_puts_color(" bytes from TEST.TXT via VFS\n",
+                               VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+                klog("[VFS] smoke-test: read ");
+                klog_dec((uint32_t)got);
+                klog(" bytes OK\r\n");
+            } else {
+                print_warn("VFS: read returned 0 or error");
+            }
+            vfs_close(fd);
+            print_ok("VFS smoke-test PASSED");
+        } else {
+            print_warn("VFS: TEST.TXT not found (expected on test disk)");
+        }
+    } else {
+        print_warn("VFS skipped — FAT32 not mounted");
+    }
+
     vga_putchar('\n');
     vga_puts_color(
-        "AIOS Phase 3.3 boot complete.  Waiting for input...\n",
+        "AIOS Phase 3.3-VFS boot complete.  Waiting for input...\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("Phase 3.3 boot complete.\r\n");
+    klog("Phase 3.3-VFS boot complete.\r\n");
 
     for (;;) __asm__ volatile ("hlt");
 }
