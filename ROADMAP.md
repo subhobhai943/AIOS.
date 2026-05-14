@@ -387,9 +387,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 > Goal: Run a transformer model (GPT-2 scale to start) natively in the OS with no external dependencies.
 
 ### 7.1 — Tensor Library
-- ⬜ Create `kernel/llm/tensor.c` + `kernel/llm/tensor.h`
-- ⬜ Tensor struct: `float* data`, `int dims[4]`, `int ndim`, `size_t numel`
-- ⬜ `tensor_alloc(dims, ndim)`, `tensor_free(t)`, `tensor_reshape()`, `tensor_slice()`, `tensor_print()`
+- ✅ Create `kernel/llm/tensor.c` + `kernel/llm/tensor.h`
+- ✅ Tensor struct: `float* data`, `int32_t dims[4]`, `int32_t ndim`, `size_t numel`
+- ✅ `tensor_alloc(dims, ndim)`, `tensor_free(t)`, `tensor_reshape()`, `tensor_slice()`, `tensor_print()` — implemented using `kmalloc`/`kfree`, no libc, debug print via `klog()`
 
 ### 7.2 — Math Operations (CPU Path)
 - ⬜ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
@@ -621,6 +621,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
 | Kernel main | `kernel/kernel_main.c` | ✅ Phase 6.4 — SIMD init wired |
 | CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
+| Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
@@ -628,9 +629,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 7.1 — Tensor library** ← **NEXT** — `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice.
-2. **Phase 7.2 — Math ops** — `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-3. **Phase 10.1/10.2 — GUI groundwork (optional parallel track)** — framebuffer init + primitive drawing + font rendering to prepare for a Windows-like desktop.
+1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
+2. **Phase 10.1/10.2 — GUI groundwork (optional parallel track)** — framebuffer init + primitive drawing + font rendering to prepare for a Windows-like desktop.
 
 ---
 
@@ -730,7 +730,7 @@ AIOS/
 │   │   ├── settings.c / .h     ← ⬜ TODO Phase 11.4
 │   │   └── ai_chat.c / .h      ← ⬜ TODO Phase 11.5
 │   └── llm/
-│       ├── tensor.c / .h       ← ⬜ TODO Phase 7.1
+│       ├── tensor.c / .h       ← ✅ Phase 7.1
 │       ├── ops.c / .h          ← ⬜ TODO Phase 7.2
 │       ├── attention.c         ← ⬜ TODO Phase 7.3
 │       ├── transformer.c       ← ⬜ TODO Phase 7.4
@@ -744,4 +744,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete. CPU SIMD fallback implemented: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection (SSE2/AVX/AVX2/AVX-512), AVX2 matrix multiply, vector add, softmax (numerically stable), GELU activation, all buffers 32-byte aligned via `kmalloc_aligned`. Next: Phase 7.1 (Tensor library: `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice) and GUI groundwork in Phase 10.1/10.2.*
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`, built on SIMD) and GUI groundwork in Phase 10.1/10.2.*
