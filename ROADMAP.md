@@ -664,9 +664,10 @@ AIOS/
 │   ├── check_deps.sh
 │   └── mkinitrd.py          ← ✅ Phase 3.4
 ├── assets/
-│   └── tokenizer/
-│       ├── vocab.bin        ← placeholder (Phase 7.7)
-│       └── config.bin       ← gpt2, vocab=50257, seq=1024
+│   ├── tokenizer/
+│   │   ├── vocab.bin        ← placeholder (Phase 7.7)
+│   │   └── config.bin       ← gpt2, vocab=50257, seq=1024
+│   └── fonts/               ← ⬜ TODO Phase 10.2 (bitmap font assets)
 ├── boot/
 │   ├── grub.cfg             ← module2 /boot/initrd.img added
 │   ├── kernel_entry.asm
@@ -711,16 +712,33 @@ AIOS/
 │   ├── acpi.c / .h          ← ✅ Phase 5.3
 │   ├── gpu/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
+│   ├── gfx/
+│   │   ├── framebuffer.c / .h ← ⬜ TODO Phase 10.1
+│   │   ├── font.c / .h         ← ⬜ TODO Phase 10.2
+│   │   └── colors.h            ← ⬜ TODO Phase 10.1 (UI colors)
+│   ├── gui/
+│   │   ├── input.c / .h        ← ⬜ TODO Phase 10.3
+│   │   ├── window.c / .h       ← ⬜ TODO Phase 10.4
+│   │   ├── wm.c                ← ⬜ TODO Phase 10.4/10.6
+│   │   ├── desktop.c           ← ⬜ TODO Phase 10.5
+│   │   ├── taskbar.c / .h      ← ⬜ TODO Phase 10.5
+│   │   └── start_menu.c        ← ⬜ TODO Phase 10.5
+│   ├── apps/
+│   │   ├── notepad.c / .h      ← ⬜ TODO Phase 11.1
+│   │   ├── explorer.c / .h     ← ⬜ TODO Phase 11.2
+│   │   ├── terminal_gui.c / .h ← ⬜ TODO Phase 11.3
+│   │   ├── settings.c / .h     ← ⬜ TODO Phase 11.4
+│   │   └── ai_chat.c / .h      ← ⬜ TODO Phase 11.5
 │   └── llm/
-│       ├── tensor.c / .h    ← ⬜ TODO Phase 7.1
-│       ├── ops.c / .h       ← ⬜ TODO Phase 7.2
-│       ├── attention.c      ← ⬜ TODO Phase 7.3
-│       ├── transformer.c    ← ⬜ TODO Phase 7.4
-│       ├── model.c / .h     ← ⬜ TODO Phase 7.5
-│       ├── loader.c / .h    ← ⬜ TODO Phase 7.6
-│       ├── tokenizer.c / .h ← ⬜ TODO Phase 7.7
-│       ├── quant.c          ← ⬜ TODO Phase 7.8
-│       └── inference.c      ← ⬜ TODO Phase 7.9
+│       ├── tensor.c / .h       ← ⬜ TODO Phase 7.1
+│       ├── ops.c / .h          ← ⬜ TODO Phase 7.2
+│       ├── attention.c         ← ⬜ TODO Phase 7.3
+│       ├── transformer.c       ← ⬜ TODO Phase 7.4
+│       ├── model.c / .h        ← ⬜ TODO Phase 7.5
+│       ├── loader.c / .h       ← ⬜ TODO Phase 7.6
+│       ├── tokenizer.c / .h    ← ⬜ TODO Phase 7.7
+│       ├── quant.c             ← ⬜ TODO Phase 7.8
+│       └── inference.c         ← ⬜ TODO Phase 7.9
 └── docs/
 ```
 
