@@ -371,13 +371,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ⬜ Submit compute shader (GCN/RDNA microcode) for matrix multiply
 
 ### 6.4 — CPU SIMD Fallback (Always Required)
-- ⬜ Create `kernel/simd.c` + `kernel/simd.h`
-- ⬜ Detect CPU features via CPUID: SSE2, AVX, AVX2, AVX-512
-- ⬜ `simd_matmul_f32(A, B, C, M, N, K)` — matrix multiply using AVX2 intrinsics
-- ⬜ `simd_vec_add_f32(a, b, out, len)` — vectorized vector add
-- ⬜ `simd_softmax_f32(x, out, len)` — softmax with max-subtraction for stability
-- ⬜ `simd_gelu_f32(x, out, len)` — GELU activation (polynomial approximation)
-- ⬜ All buffers 32-byte aligned (`kmalloc_aligned(size, 32)`)
+- ✅ Created `kernel/simd.c` + `kernel/simd.h`
+- ✅ Detect CPU features via CPUID: SSE2, AVX, AVX2, AVX-512
+- ✅ `simd_matmul_f32(A, B, C, M, N, K)` — matrix multiply using AVX2 intrinsics
+- ✅ `simd_vec_add_f32(a, b, out, len)` — vectorized vector add
+- ✅ `simd_softmax_f32(x, out, len)` — softmax with max-subtraction for stability
+- ✅ `simd_gelu_f32(x, out, len)` — GELU activation (polynomial approximation)
+- ✅ All buffers 32-byte aligned (`kmalloc_aligned(size, 32)`)
 
 ---
 
@@ -529,7 +529,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
 | Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
 | ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 5.3 — ACPI init wired |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 6.4 — SIMD init wired |
+| CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
@@ -537,9 +538,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 6.4 — CPU SIMD fallback** ← **NEXT** — `kernel/simd.c` / `kernel/simd.h`, CPUID feature detection, AVX2 math kernels
-2. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
-3. **Phase 7.2 — Math ops** — `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
+1. **Phase 7.1 — Tensor library** ← **NEXT** — `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice
+2. **Phase 7.2 — Math ops** — `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels)
+3. **Phase 7.3 — Attention** — Multi-head attention + KV-cache
 
 ---
 
@@ -581,7 +582,7 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 5.3 — ACPI init wired
+│   ├── kernel_main.c        ← Phase 6.4 — SIMD init wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -607,6 +608,7 @@ AIOS/
 │   ├── sched.c / .h         ← ✅
 │   ├── kthread.c / .h       ← ✅ Phase 4.3
 │   ├── sync.c / .h          ← ✅ Phase 4.4
+│   ├── simd.c / .h          ← ✅ Phase 6.4
 │   ├── include/
 │   ├── fs/
 │   │   ├── vfs.c / .h       ← ✅
@@ -634,4 +636,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 5.3 complete. ACPI now implemented: `kernel/acpi.c` + `kernel/acpi.h`, RSDP scan, RSDT/XSDT walk, FADT parse, `_S5_` extraction, `acpi_shutdown()` and `acpi_reboot()`. `kernel_main.c` now wires ACPI init and serial debug dump during boot. Next: Phase 6.4 (CPU SIMD fallback: CPUID feature detection, AVX2 math kernels in `kernel/simd.c` / `kernel/simd.h`).*
+*Last updated: May 2026 — Phase 6.4 complete. CPU SIMD fallback implemented: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection (SSE2/AVX/AVX2/AVX-512), AVX2 matrix multiply, vector add, softmax (numerically stable), GELU activation, all buffers 32-byte aligned via `kmalloc_aligned`. Next: Phase 7.1 (Tensor library: `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice).*
