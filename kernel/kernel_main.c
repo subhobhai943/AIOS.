@@ -1,6 +1,6 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 10.1: Framebuffer groundwork (GUI preparation)
+ * Phase 10.2: GUI text rendering groundwork
  * ============================================================ */
 
 #include "include/vga.h"
@@ -24,6 +24,7 @@
 #include "acpi.h"
 #include "gfx/framebuffer.h"  /* Phase 10.1 */
 #include "gfx/colors.h"       /* Phase 10.x UI colours */
+#include "gfx/font.h"         /* Phase 10.2 text rendering */
 
 #include <stdint.h>
 
@@ -162,12 +163,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 10.1: Framebuffer groundwork (GUI preparation)\n",
+        "  Phase 10.2: GUI text rendering groundwork\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("\r\n=== AIOS Phase 10.1 boot ===\r\n");
+    klog("\r\n=== AIOS Phase 10.2 boot ===\r\n");
 
     if (magic == MULTIBOOT2_MAGIC)
         print_ok("Multiboot2 magic OK");
@@ -233,15 +234,27 @@ void kernel_main(uint32_t magic, uint32_t addr)
     __asm__ volatile ("sti");
     print_ok("Interrupts enabled (STI)");
 
-    /* Phase 10.1: framebuffer smoke-test. */
+    /* Phase 10.1/10.2: framebuffer + text smoke-test. */
     if (magic == MULTIBOOT2_MAGIC && fb_init_from_multiboot(addr)) {
         framebuffer_t *fb = fb_get();
-        /* Clear desktop to a dark background and draw a simple banner
-         * rectangle at the top as a first GUI-like element. */
+        const gui_font_t *font = font_load_builtin();
+
+        /* Clear desktop to a dark background and draw a top taskbar-like
+         * rectangle with an "AIOS" label centered in it. */
         fb_clear(UI_COLOR_DESKTOP_BG);
         fb_fill_rect(0, 0, fb->width, 40, UI_COLOR_TASKBAR_BG);
         fb_draw_rect(0, 0, fb->width, 40, UI_COLOR_ACCENT);
-        print_ok("Framebuffer: linear 32-bit mode active (Phase 10.1)");
+
+        /* Vertically center text within the 40px bar. */
+        uint32_t text_y = 0;
+        if (font->height < 40u) {
+            text_y = (40u - font->height) / 2u;
+        }
+        font_draw_string_centered(fb, font, 0, text_y, fb->width,
+                                  "AIOS Desktop", UI_COLOR_TEXT_FG,
+                                  UI_COLOR_TASKBAR_BG);
+
+        print_ok("Framebuffer+font: GUI banner with text rendered (Phase 10.2)");
     } else {
         print_warn("Framebuffer tag missing or unsupported — staying in VGA text mode");
     }
@@ -351,9 +364,9 @@ void kernel_main(uint32_t magic, uint32_t addr)
 
     vga_putchar('\n');
     vga_puts_color(
-        "AIOS Phase 10.1 boot complete. GUI groundwork ready.\n",
+        "AIOS Phase 10.2 boot complete. GUI text groundwork ready.\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("Phase 10.1 boot complete. GUI groundwork ready.\r\n");
+    klog("Phase 10.2 boot complete. GUI text groundwork ready.\r\n");
 
     for (;;) __asm__ volatile ("hlt");
 }
