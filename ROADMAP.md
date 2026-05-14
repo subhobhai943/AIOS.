@@ -23,6 +23,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 **Language:** C (kernel), NASM Assembly (boot/ISR stubs), future userspace in C or a custom scripting layer.  
 **LLM approach:** Custom transformer inference engine running natively, weights loaded from disk, no Python, no ONNX.
 
+**GUI vision:** A Windows-style desktop environment running directly on the AIOS kernel, with a taskbar, start menu, resizable overlapping windows, basic desktop apps, and a first-class AI assistant window.
+
 ---
 
 ## Phase 0 — Toolchain & Boot Foundation
@@ -205,7 +207,6 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 3.3 — FAT32 Filesystem
 - ✅ `kernel/fat32.h` — FAT32 header: `fat32_bpb_t` (packed), `fat32_dir_entry_t` (packed), full public API
-- ✅ `kernel/fat32.c` — FAT32 read/write driver
   - ✅ `fat32_init(port, partition_lba)` — parse BPB, validate FAT32, derive geometry + `g_num_fats`, `g_fat_sectors`, `g_total_clusters`
   - ✅ `fat32_read_cluster(cluster, buf)` — resolve cluster → LBA, call `ahci_read_sectors()`
   - ✅ `fat32_next_cluster(cluster)` — read FAT sector, extract 28-bit entry (mask `0x0FFFFFFF`)
@@ -467,29 +468,118 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ---
 
-## Phase 10 — Graphical User Interface (Future)
+## Phase 10 — Graphical User Interface (GUI)
 
-### 10.1 — Framebuffer & Drawing Primitives
-- ⬜ VESA/GOP framebuffer (from Phase 1.4 TODO); `fb_fill_rect`, `fb_draw_rect`, `fb_draw_line`, `fb_blit`
+> Goal: Windows-style desktop environment on top of AIOS, using the existing mouse, keyboard, and framebuffer infrastructure.
 
-### 10.2 — Font Rendering
-- ⬜ PSF or custom 8×16 bitmap font; `font_draw_char`, `font_draw_string`
+### 10.1 — Framebuffer & Primitive Drawing
+- ⬜ Implement `kernel/gfx/framebuffer.c` + `kernel/gfx/framebuffer.h`
+  - Parse Multiboot2 framebuffer tag and expose a `framebuffer_t` struct (width, height, pitch, bpp, pixel_format)
+  - Implement `fb_init_from_multiboot(mb2_info)` to switch from VGA text mode to linear framebuffer mode during early boot
+- ⬜ Provide basic drawing APIs:
+  - `fb_put_pixel(x, y, color)` — assume 32-bit ARGB for first implementation
+  - `fb_clear(color)` — fill entire screen
+  - `fb_fill_rect(x, y, w, h, color)` — solid rectangles (used for windows, taskbar, buttons)
+  - `fb_draw_rect(x, y, w, h, color)` — 1-pixel border rectangles
+  - `fb_blit(x, y, w, h, const uint32_t* src)` — blit RGBA buffers (icons, pre-rendered glyphs)
+- ⬜ Decide on a simple color constants header (`kernel/gfx/colors.h`) for standard UI colors (background, window, accent).
 
-### 10.3 — Window Manager
-- ⬜ Window struct, `wm_create_window`, `wm_draw_window`, mouse hit-testing, dragging, Z-order
+### 10.2 — Font & Text Rendering
+- ⬜ Add `assets/fonts/` with a minimal built-in bitmap font (e.g., 8×16 or 12×16 ASCII subset) in a simple binary or PSF format.
+- ⬜ Implement `kernel/gfx/font.c` + `kernel/gfx/font.h`:
+  - `font_load_builtin()` — returns a pointer to an in-memory font description
+  - `font_draw_char(fb, font, x, y, ch, fg, bg)` — render a single character into the framebuffer
+  - `font_draw_string(fb, font, x, y, const char* s, fg, bg)` — draw text with simple clipping at screen edges
+- ⬜ Add a tiny text layout helper for GUI labels: horizontal centering, baseline alignment, and truncation with `...` when text does not fit.
 
-### 10.4 — AI Chat Window
-- ⬜ Text widget (wrap + scroll), input box, streaming token output, system tray
+### 10.3 — GUI Event Model
+- ⬜ Create a generic GUI input abstraction in `kernel/gui/input.c` + `kernel/gui/input.h`:
+  - Convert raw `mouse_event_t` and keyboard events into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP`.
+  - Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1).
+  - Support left/right button tracking and basic double-click detection (timestamp and position based).
+- ⬜ Introduce a simple global event queue `gui_event_queue` consumed by the window manager thread.
+
+### 10.4 — Window Manager Core
+- ⬜ Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
+  - `gui_window_t` struct: `id`, `title`, `x`, `y`, `width`, `height`, `z_index`, `state` (normal, moving, resizing, minimized), `is_active`, `draw_callback`, `event_callback`, user data pointer.
+  - `gui_create_window(x, y, w, h, const char* title, draw_callback, event_callback, void* user_data)` — registers a new window and returns its handle.
+  - `gui_destroy_window(win)` — removes a window from internal lists.
+- ⬜ Render loop in `kernel/gui/wm.c`:
+  - Maintain a z-ordered list of windows; top-most window is active.
+  - For each frame: clear desktop background, draw taskbar (see 10.5), then draw all windows from back to front.
+  - For each window: draw frame (title bar, border, close button stub), then invoke `draw_callback` to render client area.
+- ⬜ Hit-testing and interaction:
+  - Hit-test mouse events against window title bars and borders to support dragging and future resizing.
+  - On mouse down in a title bar, start a drag operation and bring that window to the front.
+  - On mouse up, stop dragging.
+
+### 10.5 — Desktop, Taskbar & Start Menu
+- ⬜ Implement `kernel/gui/desktop.c`:
+  - Draw a solid background color or simple gradient.
+  - Optional: support a static AIOS logo bitmap at the center or corner using `fb_blit`.
+- ⬜ Implement `kernel/gui/taskbar.c` + `kernel/gui/taskbar.h`:
+  - Reserve a bottom-of-screen strip (e.g., 32–40 px height) for the taskbar.
+  - Left side: draw a "Start" button styled after classic Windows (text label or icon) that can be clicked.
+  - Middle/right: draw rectangular buttons for each open window (window title truncated), highlighting the active window.
+- ⬜ Implement a simple start menu in `kernel/gui/start_menu.c`:
+  - When the Start button is clicked, open a vertical menu above it with entries for basic apps (File Explorer, Notepad, Terminal, Settings, AI Chat).
+  - On menu item click, launch or focus the corresponding app window.
+
+### 10.6 — GUI Kernel Thread & Mode Switch
+- ⬜ Add a new kernel thread `gui_main(void* arg)` in `kernel/gui/wm.c`:
+  - Initialize framebuffer, font system, input abstraction, desktop, taskbar, and window manager state.
+  - Enter a loop that: pulls events from `gui_event_queue`, dispatches them to the appropriate window or taskbar/start menu, and triggers redraws.
+- ⬜ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
+  - In the shell command handler, spawn `gui_main` as a kthread, hide or minimize the text-mode terminal, and hand over keyboard/mouse focus to the GUI.
+  - For now, allow returning to text mode only by rebooting; later, support VT-style switching.
 
 ---
 
-## Phase 11 — Security & Hardening (Future)
+## Phase 11 — Basic GUI Applications
 
-- ⬜ Stack canaries (`-fstack-protector-strong`)
-- ⬜ KASLR: randomize kernel load address at boot via RDRAND
-- ⬜ SMEP/SMAP: set CR4 bits, block kernel exec/read of user memory
-- ⬜ Secure boot chain: verify kernel signature before loading
-- ⬜ Sandboxed LLM inference: restricted address space, no direct hardware access
+> Goal: Provide a set of core, Windows-style applications to show off the GUI and make the OS usable.
+
+### 11.1 — Notepad (Text Editor)
+- ⬜ Implement `kernel/apps/notepad.c` + `kernel/apps/notepad.h`:
+  - Window with multiline text area and a simple menu bar (File, Edit).
+  - Basic editing features: insert text, backspace/delete, new line on Enter, scroll when content exceeds window height.
+  - Integrate with VFS for basic file operations: `Open` (read text file into buffer), `Save` (write buffer back to file), `Save As` (hardcode paths initially, later show a file picker).
+  - Reuse existing line-editing logic from the shell where possible.
+
+### 11.2 — File Explorer
+- ⬜ Implement `kernel/apps/explorer.c` + `kernel/apps/explorer.h`:
+  - Two-pane layout: left pane for directory tree (start with `/` and `/initrd`), right pane for file list.
+  - Use VFS APIs (`vfs_open`, `vfs_read`, `vfs_close`, future `vfs_listdir`) to enumerate and display files.
+  - Support basic actions on double-click: open text files in Notepad, show hex view for binaries, or later delegate to app associations.
+  - Show file name, size, and type icon in a table-like view.
+
+### 11.3 — Terminal Emulator (GUI)
+- ⬜ Implement `kernel/apps/terminal_gui.c` + `kernel/apps/terminal_gui.h`:
+  - Wrap the existing shell/terminal logic inside a GUI window.
+  - Render terminal text into a fixed-width font grid within the window client area.
+  - Forward keyboard events from the GUI window into the shell’s input ring buffer, and map mouse scroll to history navigation.
+
+### 11.4 — Settings Panel
+- ⬜ Implement `kernel/apps/settings.c` + `kernel/apps/settings.h`:
+  - Tabbed or list-based UI for basic configuration: theme (light/dark), colors, mouse speed, keyboard repeat rate, system info.
+  - Wire a few settings through to real kernel state (e.g., theme colors, mouse sensitivity), others can be placeholders for now.
+
+### 11.5 — AI Chat Window
+- ⬜ Implement `kernel/apps/ai_chat.c` + `kernel/apps/ai_chat.h`:
+  - GUI front-end for the LLM inference manager from Phase 7.
+  - Chat-style layout: scrollable message history, input box at the bottom, send button.
+  - Display user messages and AI responses in different colors/bubbles.
+  - Stream tokens from the inference thread into the window as they are generated.
+
+---
+
+## Phase 12 — Security & Hardening (Future)
+
+- ⬜ Stack canaries (`-fstack-protector-strong`).
+- ⬜ KASLR: randomize kernel load address at boot via RDRAND.
+- ⬜ SMEP/SMAP: set CR4 bits, block kernel exec/read of user memory.
+- ⬜ Secure boot chain: verify kernel signature before loading.
+- ⬜ Sandboxed LLM inference: restricted address space, no direct hardware access.
 
 ---
 
@@ -534,13 +624,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | ⬜ Not started |
+| GUI | — | ⬜ Design + plan written in ROADMAP (Phase 10–11); implementation not started |
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 7.1 — Tensor library** ← **NEXT** — `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice
-2. **Phase 7.2 — Math ops** — `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels)
-3. **Phase 7.3 — Attention** — Multi-head attention + KV-cache
+1. **Phase 7.1 — Tensor library** ← **NEXT** — `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice.
+2. **Phase 7.2 — Math ops** — `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
+3. **Phase 10.1/10.2 — GUI groundwork (optional parallel track)** — framebuffer init + primitive drawing + font rendering to prepare for a Windows-like desktop.
 
 ---
 
@@ -636,4 +726,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete. CPU SIMD fallback implemented: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection (SSE2/AVX/AVX2/AVX-512), AVX2 matrix multiply, vector add, softmax (numerically stable), GELU activation, all buffers 32-byte aligned via `kmalloc_aligned`. Next: Phase 7.1 (Tensor library: `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice).*
+*Last updated: May 2026 — Phase 6.4 complete. CPU SIMD fallback implemented: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection (SSE2/AVX/AVX2/AVX-512), AVX2 matrix multiply, vector add, softmax (numerically stable), GELU activation, all buffers 32-byte aligned via `kmalloc_aligned`. Next: Phase 7.1 (Tensor library: `kernel/llm/tensor.c` / `kernel/llm/tensor.h`, `tensor_alloc`, `tensor_free`, reshape, slice) and GUI groundwork in Phase 10.1/10.2.*
