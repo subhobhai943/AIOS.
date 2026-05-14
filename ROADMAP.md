@@ -485,12 +485,12 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Decide on a simple color constants header (`kernel/gfx/colors.h`) for standard UI colors (background, window, accent).
 
 ### 10.2 — Font & Text Rendering
-- ⬜ Add `assets/fonts/` with a minimal built-in bitmap font (e.g., 8×16 or 12×16 ASCII subset) in a simple binary or PSF format.
-- ⬜ Implement `kernel/gfx/font.c` + `kernel/gfx/font.h`:
-  - `font_load_builtin()` — returns a pointer to an in-memory font description
-  - `font_draw_char(fb, font, x, y, ch, fg, bg)` — render a single character into the framebuffer
-  - `font_draw_string(fb, font, x, y, const char* s, fg, bg)` — draw text with simple clipping at screen edges
-- ⬜ Add a tiny text layout helper for GUI labels: horizontal centering, baseline alignment, and truncation with `...` when text does not fit.
+- ✅ Implement `kernel/gfx/font.c` + `kernel/gfx/font.h`:
+  - `font_load_builtin()` — returns a pointer to an in-memory 8×16 debug font description
+  - `font_draw_char(fb, font, x, y, ch, fg, bg)` — render a single character into the framebuffer using a small bitmap glyph table
+  - `font_draw_string(fb, font, x, y, const char* s, fg, bg)` — draw a single-line string (newline terminates)
+  - `font_draw_string_centered(fb, font, region_x, region_y, region_w, s, fg, bg)` — helper for centered labels with `...` truncation when the text does not fit
+- ⬜ Add `assets/fonts/` with a richer bitmap font set (e.g., full ASCII, different sizes) in a simple binary or PSF format for future theming.
 
 ### 10.3 — GUI Event Model
 - ⬜ Create a generic GUI input abstraction in `kernel/gui/input.c` + `kernel/gui/input.h`:
@@ -603,7 +603,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, E0 arrows/home/end/del |
 | Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete — IRQ12, 3-byte PS/2, VGA cursor, ring buffer |
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc |
-| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 4-level paging, 64 MB identity map |
+| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 64 MB identity map |
 | Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, coalesce, canary, smoke-test |
 | PCI | `kernel/pci.c`, `kernel/pci.h` | ✅ Complete — bus scan, dump, busmaster DMA |
 | AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete — HBA init, port detect, DMA read+write, sector0 test |
@@ -619,19 +619,20 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
 | Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
 | ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.1 — framebuffer groundwork + scheduler test wired |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.2 — framebuffer + GUI text banner + scheduler test wired |
 | CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
 | Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
 | Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete — MB2 framebuffer tag parse + 32-bit ARGB primitives |
+| Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete — builtin 8×16 debug font + basic string/label drawing |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer groundwork implemented (Phase 10.1); window manager + apps not started |
+| GUI | — | 🔄 In progress — framebuffer + text groundwork implemented (Phase 10.1–10.2); window manager + apps not started |
 
 ### Immediate Next Steps (pick up here)
 
 1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-2. **Phase 10.2 — Font & text** — `kernel/gfx/font.c` / `kernel/gfx/font.h` + `assets/fonts/` bitmap font to draw text into the framebuffer.[
+2. **Phase 10.3 — GUI event model (optional parallel track)** — `kernel/gui/input.c` / `.h` and a simple GUI event queue feeding a future window manager.
 
 ---
 
@@ -674,7 +675,7 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 10.1 — framebuffer groundwork + scheduler test wired
+│   ├── kernel_main.c        ← Phase 10.2 — framebuffer + GUI text banner + scheduler test wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -715,7 +716,7 @@ AIOS/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
 │   ├── gfx/
 │   │   ├── framebuffer.c / .h ← ✅ Phase 10.1
-│   │   ├── font.c / .h         ← ⬜ TODO Phase 10.2
+│   │   ├── font.c / .h         ← ✅ Phase 10.2
 │   │   └── colors.h            ← ✅ Phase 10.1 (UI colors)
 │   ├── gui/
 │   │   ├── input.c / .h        ← ⬜ TODO Phase 10.3
@@ -745,4 +746,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1 (Framebuffer groundwork) implemented: `kernel/gfx/framebuffer.c` + `kernel/gfx/framebuffer.h` + `kernel/gfx/colors.h` providing MB2 framebuffer detection and 32-bit ARGB drawing primitives. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.2 (font + text rendering for GUI).*
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.2 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`) and basic text rendering (`kernel/gfx/font.c` + `.h`) providing a 32-bit ARGB desktop with a textual banner. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.3 (GUI event model for the window manager).
