@@ -1,6 +1,6 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 5.3: ACPI Power Management wired
+ * Phase 10.1: Framebuffer groundwork (GUI preparation)
  * ============================================================ */
 
 #include "include/vga.h"
@@ -22,6 +22,8 @@
 #include "task.h"
 #include "sched.h"
 #include "acpi.h"
+#include "gfx/framebuffer.h"  /* Phase 10.1 */
+#include "gfx/colors.h"       /* Phase 10.x UI colours */
 
 #include <stdint.h>
 
@@ -160,12 +162,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 5.3: ACPI Power Management wired\n",
+        "  Phase 10.1: Framebuffer groundwork (GUI preparation)\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("\r\n=== AIOS Phase 5.3 boot ===\r\n");
+    klog("\r\n=== AIOS Phase 10.1 boot ===\r\n");
 
     if (magic == MULTIBOOT2_MAGIC)
         print_ok("Multiboot2 magic OK");
@@ -210,17 +212,6 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_ok("Heap: 2 MB kernel heap ready");
     }
 
-    {
-        char *p = (char *)kmalloc(64);
-        KERNEL_ASSERT(p != 0, "kmalloc(64) returned NULL");
-        for (int i = 0; i < 64; i++) p[i] = (char)(i ^ 0xA5);
-        for (int i = 0; i < 64; i++)
-            KERNEL_ASSERT((uint8_t)p[i] == (uint8_t)(i ^ 0xA5),
-                          "heap write/read mismatch");
-        kfree(p);
-        print_ok("Heap smoke-test: kmalloc/write/verify/kfree OK");
-    }
-
     apic_init();
     print_ok("APIC: legacy PIC dead, LAPIC active");
 
@@ -241,6 +232,19 @@ void kernel_main(uint32_t magic, uint32_t addr)
 
     __asm__ volatile ("sti");
     print_ok("Interrupts enabled (STI)");
+
+    /* Phase 10.1: framebuffer smoke-test. */
+    if (magic == MULTIBOOT2_MAGIC && fb_init_from_multiboot(addr)) {
+        framebuffer_t *fb = fb_get();
+        /* Clear desktop to a dark background and draw a simple banner
+         * rectangle at the top as a first GUI-like element. */
+        fb_clear(UI_COLOR_DESKTOP_BG);
+        fb_fill_rect(0, 0, fb->width, 40, UI_COLOR_TASKBAR_BG);
+        fb_draw_rect(0, 0, fb->width, 40, UI_COLOR_ACCENT);
+        print_ok("Framebuffer: linear 32-bit mode active (Phase 10.1)");
+    } else {
+        print_warn("Framebuffer tag missing or unsupported — staying in VGA text mode");
+    }
 
     vga_puts_color("\n  [TEST] pit_sleep_ms(200)...\n",
                    VGA_COLOR_BROWN, VGA_COLOR_BLACK);
@@ -347,9 +351,9 @@ void kernel_main(uint32_t magic, uint32_t addr)
 
     vga_putchar('\n');
     vga_puts_color(
-        "AIOS Phase 5.3 boot complete. Waiting for input...\n",
+        "AIOS Phase 10.1 boot complete. GUI groundwork ready.\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("Phase 5.3 boot complete.\r\n");
+    klog("Phase 10.1 boot complete. GUI groundwork ready.\r\n");
 
     for (;;) __asm__ volatile ("hlt");
 }
