@@ -493,11 +493,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ⬜ Add `assets/fonts/` with a richer bitmap font set (e.g., full ASCII, different sizes) in a simple binary or PSF format for future theming.
 
 ### 10.3 — GUI Event Model
-- ⬜ Create a generic GUI input abstraction in `kernel/gui/input.c` + `kernel/gui/input.h`:
-  - Convert raw `mouse_event_t` and keyboard events into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP`.
-  - Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1).
-  - Support left/right button tracking and basic double-click detection (timestamp and position based).
-- ⬜ Introduce a simple global event queue `gui_event_queue` consumed by the window manager thread.
+- 🔄 Create a generic GUI input abstraction in `kernel/gui/input.c` + `kernel/gui/input.h`:
+  - ✅ Convert raw mouse/keyboard data into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP` via a single ring buffer of `gui_event_t`.
+  - ✅ Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1) with clamping logic in `gui_input_update_mouse_pos_locked`.
+  - ✅ Support left/right (and middle) button tracking and naive double-click detection (timestamp + small position delta) flagged via `GUI_MOUSE_FLAG_DOUBLE_CLICK` on `GUI_EVENT_MOUSE_DOWN`.
+- ⬜ Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active.
 
 ### 10.4 — Window Manager Core
 - ⬜ Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
@@ -624,15 +624,16 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
 | Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete — MB2 framebuffer tag parse + 32-bit ARGB primitives |
 | Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete — builtin 8×16 debug font + basic string/label drawing |
+| GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete — GUI event queue + mouse state + double-click detection APIs |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer + text groundwork implemented (Phase 10.1–10.2); window manager + apps not started |
+| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue implemented (Phase 10.1–10.3); window manager + apps not started |
 
 ### Immediate Next Steps (pick up here)
 
 1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-2. **Phase 10.3 — GUI event model (optional parallel track)** — `kernel/gui/input.c` / `.h` and a simple GUI event queue feeding a future window manager.
+2. **Phase 10.4 — Window manager core (optional parallel track)** — `kernel/gui/window.c` / `.h` and `kernel/gui/wm.c` to create/draw windows and consume GUI events from `gui_input`.
 
 ---
 
@@ -719,7 +720,7 @@ AIOS/
 │   │   ├── font.c / .h         ← ✅ Phase 10.2
 │   │   └── colors.h            ← ✅ Phase 10.1 (UI colors)
 │   ├── gui/
-│   │   ├── input.c / .h        ← ⬜ TODO Phase 10.3
+│   │   ├── input.c / .h        ← ✅ Phase 10.3
 │   │   ├── window.c / .h       ← ⬜ TODO Phase 10.4
 │   │   ├── wm.c                ← ⬜ TODO Phase 10.4/10.6
 │   │   ├── desktop.c           ← ⬜ TODO Phase 10.5
@@ -746,4 +747,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.2 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`) and basic text rendering (`kernel/gfx/font.c` + `.h`) providing a 32-bit ARGB desktop with a textual banner. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.3 (GUI event model for the window manager).
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.3 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), and a GUI input queue (`kernel/gui/input.c` + `.h`) providing a 32-bit ARGB desktop with a textual banner and event stream ready for a window manager. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.4 (window manager core consuming GUI events).
