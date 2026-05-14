@@ -500,18 +500,17 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ⬜ Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active.
 
 ### 10.4 — Window Manager Core
-- ⬜ Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
-  - `gui_window_t` struct: `id`, `title`, `x`, `y`, `width`, `height`, `z_index`, `state` (normal, moving, resizing, minimized), `is_active`, `draw_callback`, `event_callback`, user data pointer.
-  - `gui_create_window(x, y, w, h, const char* title, draw_callback, event_callback, void* user_data)` — registers a new window and returns its handle.
-  - `gui_destroy_window(win)` — removes a window from internal lists.
-- ⬜ Render loop in `kernel/gui/wm.c`:
-  - Maintain a z-ordered list of windows; top-most window is active.
-  - For each frame: clear desktop background, draw taskbar (see 10.5), then draw all windows from back to front.
-  - For each window: draw frame (title bar, border, close button stub), then invoke `draw_callback` to render client area.
-- ⬜ Hit-testing and interaction:
-  - Hit-test mouse events against window title bars and borders to support dragging and future resizing.
-  - On mouse down in a title bar, start a drag operation and bring that window to the front.
-  - On mouse up, stop dragging.
+- 🔄 Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
+  - ✅ `gui_window_t` struct: `id`, `title`, `x`, `y`, `width`, `height`, `state` (normal/moving/resizing/minimized/hidden), `is_active`, `draw_callback`, `event_callback`, user data pointer.
+  - ✅ `gui_create_window(x, y, w, h, const char* title, draw_callback, event_callback, void* user_data)` — registers a new window (kmalloc’d) and inserts it at the front of a doubly-linked z-ordered list.
+  - ✅ `gui_destroy_window(win)` — removes a window from internal lists and frees it.
+- 🔄 Render loop in `kernel/gui/wm.c`:
+  - ✅ Maintain a z-ordered list of windows; top-most window is active.
+  - ✅ For each frame: clear desktop background, draw a top banner, then draw all windows from back to front.
+  - ✅ For each window: draw a simple frame (title bar, border, body background) and invoke `draw_callback` to render the client area.
+- 🔄 Hit-testing and interaction:
+  - ✅ On mouse-down, hit-test windows from top to bottom (current simple linear search) and bring the first hit to front, marking it active.
+  - ⬜ Add proper title-bar region detection and dragging/resizing state transitions.
 
 ### 10.5 — Desktop, Taskbar & Start Menu
 - ⬜ Implement `kernel/gui/desktop.c`:
@@ -526,9 +525,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - On menu item click, launch or focus the corresponding app window.
 
 ### 10.6 — GUI Kernel Thread & Mode Switch
-- ⬜ Add a new kernel thread `gui_main(void* arg)` in `kernel/gui/wm.c`:
-  - Initialize framebuffer, font system, input abstraction, desktop, taskbar, and window manager state.
-  - Enter a loop that: pulls events from `gui_event_queue`, dispatches them to the appropriate window or taskbar/start menu, and triggers redraws.
+- 🔄 Add a new kernel thread `gui_main` (initially implemented inside `kernel/gui/wm.c` via `gui_wm_start()`):
+  - ✅ Initialize framebuffer, font system, input abstraction, and window manager state.
+  - ✅ Enter a loop that: pulls events from the GUI event queue, dispatches them to the active window, and triggers full-screen redraws.
 - ⬜ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
   - In the shell command handler, spawn `gui_main` as a kthread, hide or minimize the text-mode terminal, and hand over keyboard/mouse focus to the GUI.
   - For now, allow returning to text mode only by rebooting; later, support VT-style switching.
@@ -619,21 +618,23 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
 | Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
 | ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.2 — framebuffer + GUI text banner + scheduler test wired |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 — framebuffer + banner + basic GUI window manager test wired |
 | CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
 | Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
 | Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete — MB2 framebuffer tag parse + 32-bit ARGB primitives |
 | Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete — builtin 8×16 debug font + basic string/label drawing |
 | GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete — GUI event queue + mouse state + double-click detection APIs |
+| GUI window core | `kernel/gui/window.c`, `kernel/gui/window.h` | ✅ Complete — minimal window struct + doubly-linked z-order list + creation/destruction APIs |
+| GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | 🔄 In progress — basic redraw loop + single test window + mouse-down activation; no dragging/resizing yet |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue implemented (Phase 10.1–10.3); window manager + apps not started |
+| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + basic WM test (Phase 10.1–10.4); desktop/taskbar/start menu + apps not started |
 
 ### Immediate Next Steps (pick up here)
 
 1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-2. **Phase 10.4 — Window manager core (optional parallel track)** — `kernel/gui/window.c` / `.h` and `kernel/gui/wm.c` to create/draw windows and consume GUI events from `gui_input`.
+2. **Phase 10.5 — Desktop + taskbar (optional parallel track)** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c` / `.h` to move the top banner into desktop code and add a Windows-like taskbar and Start button.
 
 ---
 
@@ -676,7 +677,7 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 10.2 — framebuffer + GUI text banner + scheduler test wired
+│   ├── kernel_main.c        ← Phase 10.4 — framebuffer + banner + basic GUI window manager test wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -721,8 +722,8 @@ AIOS/
 │   │   └── colors.h            ← ✅ Phase 10.1 (UI colors)
 │   ├── gui/
 │   │   ├── input.c / .h        ← ✅ Phase 10.3
-│   │   ├── window.c / .h       ← ⬜ TODO Phase 10.4
-│   │   ├── wm.c                ← ⬜ TODO Phase 10.4/10.6
+│   │   ├── window.c / .h       ← ✅ Phase 10.4
+│   │   ├── wm.c / wm.h         ← 🔄 Phase 10.4/10.6
 │   │   ├── desktop.c           ← ⬜ TODO Phase 10.5
 │   │   ├── taskbar.c / .h      ← ⬜ TODO Phase 10.5
 │   │   └── start_menu.c        ← ⬜ TODO Phase 10.5
@@ -747,4 +748,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.3 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), and a GUI input queue (`kernel/gui/input.c` + `.h`) providing a 32-bit ARGB desktop with a textual banner and event stream ready for a window manager. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.4 (window manager core consuming GUI events).
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.5 (desktop, taskbar, and Start menu).
