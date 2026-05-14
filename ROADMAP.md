@@ -392,10 +392,10 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `tensor_alloc(dims, ndim)`, `tensor_free(t)`, `tensor_reshape()`, `tensor_slice()`, `tensor_print()` — implemented using `kmalloc`/`kfree`, no libc, debug print via `klog()`
 
 ### 7.2 — Math Operations (CPU Path)
-- ⬜ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
-- ⬜ `ops_matmul`, `ops_add`, `ops_scale`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
-- ⬜ `ops_embedding_lookup` — gather rows from weight table
-- ⬜ `ops_rope(q, k, pos)` — Rotary Position Embedding (LLaMA)
+- ✅ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
+- ✅ `ops_matmul`, `ops_add`, `ops_scale`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
+- ✅ `ops_embedding_lookup` — gather rows from weight table
+- ✅ `ops_rope(q, k, pos)` — Rotary Position Embedding (LLaMA)
 
 ### 7.3 — Attention Mechanism
 - ⬜ Create `kernel/llm/attention.c`
@@ -621,19 +621,20 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 — framebuffer + banner + basic GUI window manager test wired |
 | CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
 | Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
+| LLM math ops | `kernel/llm/ops.c`, `kernel/llm/ops.h` | ✅ Complete — matmul/add/scale/softmax/layer norm/GELU/embedding/RoPE |
 | Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete — MB2 framebuffer tag parse + 32-bit ARGB primitives |
 | Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete — builtin 8×16 debug font + basic string/label drawing |
 | GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete — GUI event queue + mouse state + double-click detection APIs |
 | GUI window core | `kernel/gui/window.c`, `kernel/gui/window.h` | ✅ Complete — minimal window struct + doubly-linked z-order list + creation/destruction APIs |
 | GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | 🔄 In progress — basic redraw loop + single test window + mouse-down activation; no dragging/resizing yet |
-| LLM engine | — | ⬜ Not started |
+| LLM engine | `kernel/llm/tensor.c`, `kernel/llm/ops.c` | 🔄 In progress — tensor core + Phase 7.2 CPU math ops complete |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
 | GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + basic WM test (Phase 10.1–10.4); desktop/taskbar/start menu + apps not started |
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
+1. **Phase 7.3 — Attention mechanism** ← **NEXT** — `kernel/llm/attention.c`, multi-head attention, causal masking, softmax, output projection, and KV-cache scaffolding.
 2. **Phase 10.5 — Desktop + taskbar (optional parallel track)** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c` / `.h` to move the top banner into desktop code and add a Windows-like taskbar and Start button.
 
 ---
@@ -735,8 +736,8 @@ AIOS/
 │   │   └── ai_chat.c / .h      ← ⬜ TODO Phase 11.5
 │   └── llm/
 │       ├── tensor.c / .h       ← ✅ Phase 7.1
-│       ├── ops.c / .h          ← ⬜ TODO Phase 7.2
-│       ├── attention.c         ← ⬜ TODO Phase 7.3
+│       ├── ops.c / .h          ← ✅ Phase 7.2
+│       ├── attention.c         ← ⬜ TODO Phase 7.3 NEXT
 │       ├── transformer.c       ← ⬜ TODO Phase 7.4
 │       ├── model.c / .h        ← ⬜ TODO Phase 7.5
 │       ├── loader.c / .h       ← ⬜ TODO Phase 7.6
@@ -748,4 +749,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.5 (desktop, taskbar, and Start menu).
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 7.2 (Math ops) implemented: `kernel/llm/ops.c` + `kernel/llm/ops.h` with matmul, add, scale, softmax, layer norm, GELU, embedding lookup, and RoPE backed by SIMD where safe. Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 7.3 (attention mechanism + KV-cache) and Phase 10.5 (desktop, taskbar, and Start menu).

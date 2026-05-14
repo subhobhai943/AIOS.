@@ -30,6 +30,25 @@
 #define VGA_YELLOW   14
 #define VGA_WHITE    15
 
+/* Compatibility aliases used by the newer kernel/include/vga.h API. */
+#define VGA_COLOR_BLACK         VGA_BLACK
+#define VGA_COLOR_BLUE          VGA_BLUE
+#define VGA_COLOR_GREEN         VGA_GREEN
+#define VGA_COLOR_CYAN          VGA_CYAN
+#define VGA_COLOR_RED           VGA_RED
+#define VGA_COLOR_MAGENTA       VGA_MAGENTA
+#define VGA_COLOR_BROWN         VGA_BROWN
+#define VGA_COLOR_LIGHT_GREY    VGA_LGRAY
+#define VGA_COLOR_DARK_GREY     VGA_DGRAY
+#define VGA_COLOR_LIGHT_BLUE    VGA_LBLUE
+#define VGA_COLOR_LIGHT_GREEN   VGA_LGREEN
+#define VGA_COLOR_LIGHT_CYAN    VGA_LCYAN
+#define VGA_COLOR_LIGHT_RED     VGA_LRED
+#define VGA_COLOR_LIGHT_MAGENTA VGA_PINK
+#define VGA_COLOR_BROWN_YELLOW  VGA_YELLOW
+#define VGA_COLOR_YELLOW        VGA_YELLOW
+#define VGA_COLOR_WHITE         VGA_WHITE
+
 /* Phase 0–4 API (unchanged) */
 void vga_init(void);
 void vga_clear(void);
@@ -37,6 +56,8 @@ void vga_putchar(char c);
 void vga_puts(const char *str);
 void vga_puts_color(const char *str, uint8_t fg, uint8_t bg);
 void vga_set_color(uint8_t fg, uint8_t bg);
+void vga_puthex(uint64_t val);
+void vga_putdec(uint64_t val);
 
 /* Phase 5.1 additions */
 void vga_set_cursor(uint8_t col, uint8_t row);

@@ -9,8 +9,8 @@ AS      := nasm
 LD      := x86_64-elf-ld
 
 CFLAGS  := -ffreestanding -O2 -Wall -Wextra -fno-exceptions \
-           -fno-stack-protector -mno-red-zone -fno-pic \
-           -I./kernel/include
+           -fno-stack-protector -mno-red-zone -mcmodel=kernel -fno-pic \
+           -I./kernel -I./kernel/include
 
 LDFLAGS := -T boot/linker.ld -nostdlib
 
@@ -20,10 +20,13 @@ ASFLAGS_ELF  := -f elf64
 # Directories
 BUILD   := build
 ISO     := aios.iso
+INITRD  := boot/initrd.img
 
 # Sources
-C_SRCS  := $(wildcard kernel/*.c)
-ASM_SRCS := $(wildcard kernel/*.asm)
+C_SRCS  := $(shell find kernel -type f -name '*.c' \
+           ! -path 'kernel/shell/*' \
+           ! -path 'kernel/gui/input_wiring.c')
+ASM_SRCS := $(shell find kernel -type f -name '*.asm')
 
 C_OBJS  := $(patsubst kernel/%.c,  $(BUILD)/%.o, $(C_SRCS))
 A_OBJS  := $(patsubst kernel/%.asm,$(BUILD)/%_asm.o, $(ASM_SRCS))
@@ -32,11 +35,19 @@ A_OBJS  := $(patsubst kernel/%.asm,$(BUILD)/%_asm.o, $(ASM_SRCS))
 
 all: $(BUILD)/kernel.bin
 
+# ── Initrd ──────────────────────────────────────────────────
+$(INITRD): scripts/mkinitrd.py assets/tokenizer/vocab.bin assets/tokenizer/config.bin
+	python3 scripts/mkinitrd.py -o $@ \
+		assets/tokenizer/vocab.bin /tokenizer/vocab.bin \
+		assets/tokenizer/config.bin /tokenizer/config.bin
+
 # ── Kernel objects ─────────────────────────────────────────
 $(BUILD)/%.o: kernel/%.c | $(BUILD)
+	mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/%_asm.o: kernel/%.asm | $(BUILD)
+	mkdir -p $(dir $@)
 	$(AS) $(ASFLAGS_ELF) $< -o $@
 
 # ── Boot object ────────────────────────────────────────────
@@ -48,9 +59,10 @@ $(BUILD)/kernel.bin: $(BUILD)/kernel_entry_asm.o $(C_OBJS) $(A_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $^
 
 # ── ISO (requires GRUB) ────────────────────────────────────
-iso: $(BUILD)/kernel.bin
+iso: $(BUILD)/kernel.bin $(INITRD)
 	mkdir -p $(BUILD)/isodir/boot/grub
 	cp $(BUILD)/kernel.bin $(BUILD)/isodir/boot/kernel.bin
+	cp $(INITRD) $(BUILD)/isodir/boot/initrd.img
 	cp boot/grub.cfg $(BUILD)/isodir/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(BUILD)/isodir
 
@@ -67,4 +79,4 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 clean:
-	rm -rf $(BUILD) $(ISO)
+	rm -rf $(BUILD) $(ISO) $(INITRD)

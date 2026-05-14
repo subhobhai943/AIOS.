@@ -51,8 +51,8 @@ static kthread_slot_t *slot_alloc(void) {
  * task_create returns). */
 static void kthread_trampoline(void) {
     /* Identify ourselves */
-    task_t *self = task_current();
-    int my_pid   = self ? self->pid : -1;
+    task_t *self = task_get_current();
+    int my_pid = self ? (int)self->pid : -1;
 
     kthread_slot_t *slot = (void*)0;
     for (int i = 0; i < KTHREAD_MAX; i++) {
@@ -93,8 +93,12 @@ kthread_t kthread_create(void (*fn)(void *arg), void *arg,
     }
 
     /* task_create with our trampoline as the entry point */
-    task_t *t = task_create((task_entry_fn)kthread_trampoline,
-                            stack_size, name);
+    if (stack_size > 0xFFFFFFFFu) {
+        stack_size = 0xFFFFFFFFu;
+    }
+
+    task_t *t = task_create(kthread_trampoline,
+                            (uint32_t)stack_size, name);
     if (!t) {
         serial_puts(SERIAL_COM1, "[kthread] task_create failed\n");
         return KTHREAD_INVALID;
@@ -123,6 +127,6 @@ void kthread_join(kthread_t t) {
 }
 
 kthread_t kthread_self(void) {
-    task_t *t = task_current();
+    task_t *t = task_get_current();
     return t ? (kthread_t)t : KTHREAD_INVALID;
 }

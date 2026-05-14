@@ -124,6 +124,8 @@ static void wm_draw_window_frame(const gui_window_t *win,
 
 static void wm_draw_cursor(framebuffer_t *fb, int32_t cx, int32_t cy)
 {
+    (void)fb;
+
     /* 8-pixel tall left-pointing filled triangle arrow */
     static const uint8_t arrow[8] = { 1,2,3,4,5,6,7,8 };
     uint32_t col = UI_COLOR_TEXT_FG;
@@ -293,12 +295,12 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
 /* WM thread entry                                                      */
 /* ------------------------------------------------------------------ */
 
-static int wm_thread_main(void *arg)
+static void wm_thread_main(void *arg)
 {
     (void)arg;
 
     framebuffer_t *fb = fb_get();
-    if (!fb) return 0;
+    if (!fb) return;
 
     const gui_font_t *font = font_load_builtin();
 
@@ -329,7 +331,7 @@ static int wm_thread_main(void *arg)
         wm_redraw_all(&st);
     }
 
-    return 0;
+    return;
 }
 
 void gui_wm_start(void)

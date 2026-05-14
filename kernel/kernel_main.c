@@ -154,6 +154,8 @@ static void task_c(void)
 
 void kernel_main(uint32_t magic, uint32_t addr)
 {
+    int gui_framebuffer_ready = 0;
+
     vga_init();
     serial_init(SERIAL_COM1, 115200);
 
@@ -253,9 +255,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
                                   UI_COLOR_TASKBAR_BG);
 
         print_ok("Framebuffer+font: GUI banner rendered (Phase 10.x)");
-
-        gui_wm_start();
-        print_ok("GUI window manager thread started (Phase 10.4)");
+        gui_framebuffer_ready = 1;
     } else {
         print_warn("Framebuffer tag missing or unsupported — staying in VGA text mode");
     }
@@ -341,6 +341,11 @@ void kernel_main(uint32_t magic, uint32_t addr)
 
     sched_init();
     print_ok("Scheduler initialised (idle task created)");
+
+    if (gui_framebuffer_ready) {
+        gui_wm_start();
+        print_ok("GUI window manager thread started (Phase 10.4)");
+    }
 
     {
         task_t *ta = task_create(task_a, 8192, "task_a");

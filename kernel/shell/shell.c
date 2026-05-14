@@ -26,7 +26,7 @@
 #include "../fat32.h"
 #include "../fs/vfs.h"
 #include "../fs/vfs_initrd.h"
-#include "../panic.h"
+#include "panic.h"
 
 /* ── forward declarations for built-in handlers ────────────── */
 static void cmd_help    (int argc, char **argv);

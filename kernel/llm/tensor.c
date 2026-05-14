@@ -31,7 +31,7 @@ tensor_t *tensor_alloc(const int32_t *dims, int32_t ndim) {
     tensor_t *t = (tensor_t *)kmalloc(sizeof(tensor_t));
     if (!t) return 0;
 
-    t->data = (float *)kmalloc(numel * sizeof(float));
+    t->data = (float *)kmalloc_aligned(numel * sizeof(float), 32);
     if (!t->data) {
         kfree(t);
         return 0;
@@ -47,7 +47,7 @@ tensor_t *tensor_alloc(const int32_t *dims, int32_t ndim) {
 
 void tensor_free(tensor_t *t) {
     if (!t) return;
-    if (t->data) kfree(t->data);
+    if (t->data) kfree_aligned(t->data);
     kfree(t);
 }
 

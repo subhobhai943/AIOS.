@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 /* ---- state ----------------------------------------------- */
-static volatile uint64_t g_ticks = 0;
+volatile uint64_t g_ticks = 0;
 static uint32_t          g_tick_hz = PIT_DEFAULT_HZ;
 
 /* ---- port I/O -------------------------------------------- */

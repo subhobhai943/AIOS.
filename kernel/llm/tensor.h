@@ -19,8 +19,9 @@ typedef struct tensor {
 } tensor_t;
 
 /* Allocate a new tensor with the given shape. All dims[i]
- * must be > 0. Returns NULL on failure. The buffer is left
- * uninitialised; callers typically follow with a fill.
+ * must be > 0. Returns NULL on failure. The float buffer is
+ * 32-byte aligned for SIMD kernels and is left uninitialised;
+ * callers typically follow with a fill.
  */
 
 tensor_t *tensor_alloc(const int32_t *dims, int32_t ndim);
