@@ -338,12 +338,12 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `shell_run(void *arg)` kthread entry — launched via `kthread_create(shell_run, NULL, 65536, "shell")`
 - ✅ Wiring + API additions documented in `kernel/shell/shell_kernel_main_patch.md`
 
-### 5.3 — ACPI (Power Management) ← **NEXT**
-- ⬜ Create `kernel/acpi.c` + `kernel/acpi.h`
-- ⬜ Find RSDP in BIOS area or EFI config table
-- ⬜ Parse RSDT/XSDT to find FADT
-- ⬜ `acpi_shutdown()` — write SLP_TYPa + SLP_EN to PM1a_CNT
-- ⬜ `acpi_reboot()` — write to RESET_REG in FADT
+### 5.3 — ACPI
+- ✅ Create `kernel/acpi.c` + `kernel/acpi.h`
+- ✅ Find RSDP in BIOS area or EFI config table
+- ✅ Parse RSDT/XSDT to find FADT
+- ✅ `acpi_shutdown()` — write SLP_TYPa + SLP_EN to PM1a_CNT
+- ✅ `acpi_reboot()` — write to RESET_REG in FADT
 
 ---
 
@@ -528,8 +528,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete — spinlock (xchg+irqsave), mutex (yield-spin+waiter list), semaphore (counting) |
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
 | Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 5.2 — shell kthread launched |
-| ACPI | — | ⬜ Not started (Phase 5.3) |
+| ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 5.3 — ACPI init wired |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
@@ -537,9 +537,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 5.3 — ACPI** ← **NEXT** — `acpi_shutdown()` / `acpi_reboot()` via FADT (RSDP → RSDT/XSDT → FADT)
-2. **Phase 6.4 — SIMD fallback** — AVX2 matmul/softmax/gelu (needed before LLM engine)
-3. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
+1. **Phase 6.4 — CPU SIMD fallback** ← **NEXT** — `kernel/simd.c` / `kernel/simd.h`, CPUID feature detection, AVX2 math kernels
+2. **Phase 7.1 — Tensor library** — `tensor_alloc`, `tensor_free`, reshape, slice
+3. **Phase 7.2 — Math ops** — `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
 
 ---
 
@@ -581,7 +581,7 @@ AIOS/
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 5.2 — shell kthread launched
+│   ├── kernel_main.c        ← Phase 5.3 — ACPI init wired
 │   ├── gdt.c                ← ✅
 │   ├── idt.c                ← ✅
 │   ├── isr_stubs.asm        ← ✅
@@ -616,7 +616,7 @@ AIOS/
 │   │   ├── shell.c / .h     ← ✅ Phase 5.2
 │   │   ├── terminal_kernel_main_patch.md
 │   │   └── shell_kernel_main_patch.md
-│   ├── acpi.c / .h          ← ⬜ TODO Phase 5.3  ← NEXT
+│   ├── acpi.c / .h          ← ✅ Phase 5.3
 │   ├── gpu/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
 │   └── llm/
@@ -634,4 +634,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 5.2 complete. AIOS shell operational: `AIOS> ` prompt, single-quoted tokenizer, 13 built-in commands (help/clear/echo/mem/ps/ls/cat/hexdump/load/ai/chat/reboot/shutdown), `shell_run` kthread launched from `kernel_main`. `load`/`ai`/`chat` are stubs awaiting Phase 7.6/7.9. `reboot` uses PS/2 reset pulse; `shutdown` uses QEMU ACPI port — both get clean ACPI paths at Phase 5.3. Next: Phase 5.3 (ACPI: RSDP → RSDT/XSDT → FADT → acpi_shutdown/acpi_reboot).*
+*Last updated: May 2026 — Phase 5.3 complete. ACPI now implemented: `kernel/acpi.c` + `kernel/acpi.h`, RSDP scan, RSDT/XSDT walk, FADT parse, `_S5_` extraction, `acpi_shutdown()` and `acpi_reboot()`. `kernel_main.c` now wires ACPI init and serial debug dump during boot. Next: Phase 6.4 (CPU SIMD fallback: CPUID feature detection, AVX2 math kernels in `kernel/simd.c` / `kernel/simd.h`).*
