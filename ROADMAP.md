@@ -235,7 +235,12 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Integrated with WM via `wm_create_window` / `wm_get_fb` / `wm_dirty`
 
 ### 11.2 — File Explorer
-- ⬜ `kernel/apps/explorer.c` — two-pane VFS browser
+- ✅ `kernel/apps/explorer.c`, `kernel/apps/explorer.h`
+- ✅ Two-pane style: path header + list view
+- ✅ Keyboard: Up/Down, Enter, Backspace, double-click selection
+- ✅ CWD navigation, ".." synthetic parent entry
+- ✅ VFS integration via vfs_stat (dummy listing until readdir exists)
+- ✅ Notepad integration: Enter/double-click file opens in Notepad
 
 ### 11.3 — GUI Terminal
 - ⬜ `kernel/apps/terminal_gui.c` — shell in a GUI window
@@ -270,14 +275,15 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Model Forward + Sampling | `llm/model.c` | ✅ 7.5 |
 | Weight Loader | `llm/loader.c` | ✅ 7.6 |
 | Tokenizer | `llm/tokenizer.c` | ✅ 7.7 |
-| **Notepad** | `apps/notepad.c` | ✅ **11.1** |
+| Notepad | `apps/notepad.c` | ✅ 11.1 |
+| **File Explorer** | `apps/explorer.c` | ✅ **11.2** |
 | Quantization | `llm/quant.c` | ⬜ 7.8 |
-| File Explorer | `apps/explorer.c` | ⬜ **NEXT → 11.2** |
+| GUI Terminal | `apps/terminal_gui.c` | ⬜ **NEXT → 11.3** |
 
 ### Immediate Next Steps
 
-1. **Phase 11.2 — File Explorer** ← **NEXT (GUI track)**  
-   `kernel/apps/explorer.c` — two-pane VFS browser: left pane = directory tree, right pane = file list. Double-click dir to navigate, double-click file to open in Notepad.
+1. **Phase 11.3 — GUI Terminal** ← **NEXT (GUI track)**  
+   `kernel/apps/terminal_gui.c` — terminal emulator in a window, backing onto existing shell.
 
 2. **Phase 7.8 — Quantization** (LLM track)  
    `kernel/llm/quant.c` — on-the-fly Q8_0/Q4_K dequant matmul.
@@ -313,12 +319,12 @@ kernel/llm/
 
 kernel/apps/
   notepad.c/h     ← ✅ 11.1
-  explorer.c/h    ← ⬜ NEXT 11.2
-  terminal_gui.c  ← ⬜ 11.3
+  explorer.c/h    ← ✅ 11.2
+  terminal_gui.c  ← ⬜ NEXT 11.3
   settings.c      ← ⬜ 11.4
   ai_chat.c       ← ⬜ 11.5
 ```
 
 ---
 
-*Last updated: May 2026 — Phase 11.1 complete (Notepad: gap buffer, full keyboard handling, VFS open/save, line gutter, blinking cursor, status bar). Next: Phase 11.2 — File Explorer (`kernel/apps/explorer.c`).*
+*Last updated: May 2026 — Phase 11.2 complete (File Explorer: path header, list view, keyboard + mouse navigation, Notepad integration). Next: Phase 11.3 — GUI Terminal (`kernel/apps/terminal_gui.c`).*
