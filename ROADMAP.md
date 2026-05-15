@@ -174,8 +174,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `transformer_block_forward` — single-token step, zero heap leak
 
 ### 7.5 — Full Model Forward Pass
-- ⬜ `kernel/llm/model.c`, `kernel/llm/model.h`
-- ⬜ `model_config_t`, `aios_model_t`, `model_forward()`, greedy/top-k/top-p sampling
+- ✅ `kernel/llm/model.c`, `kernel/llm/model.h`
+- ✅ `model_config_t`, `model_arch_t`, `sample_config_t`, `aios_model_t`
+- ✅ `model_alloc` / `model_free` / `model_reset_kvcache`
+- ✅ `model_forward` — embed → N blocks → final norm → LM-head logits
+- ✅ `model_sample` — greedy / temperature / top-k / top-p (nucleus)
 
 ### 7.6 — Weight Loader
 - ⬜ `kernel/llm/loader.c` — GGUF or custom binary, FP16/Q4
@@ -265,30 +268,28 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 |-----------|-------|--------|
 | Build / boot / GDT / IDT | — | ✅ |
 | APIC / PIT / VGA / Serial | — | ✅ |
-| Keyboard | `kernel/keyboard.c` | ✅ + GUI hook |
-| Mouse | `kernel/mouse.c` | ✅ + GUI hook |
+| Keyboard + Mouse | `keyboard.c`, `mouse.c` | ✅ + GUI hooks |
 | PMM / VMM / Heap | — | ✅ |
 | PCI / AHCI / FAT32 / VFS / Initrd | — | ✅ |
 | Task / Scheduler / kthread / Sync | — | ✅ |
 | Terminal / Shell / ACPI | — | ✅ |
 | CPU SIMD | `kernel/simd.c` | ✅ |
-| Tensor + Ops | `kernel/llm/tensor.c`, `ops.c` | ✅ |
-| **Attention + KV-Cache** | `kernel/llm/attention.c` | ✅ Phase 7.3 |
-| **Transformer Block** | `kernel/llm/transformer.c` | ✅ Phase 7.4 |
+| Tensor + Ops | `kernel/llm/tensor.c`, `ops.c` | ✅ 7.1–7.2 |
+| Attention + KV-Cache | `kernel/llm/attention.c` | ✅ 7.3 |
+| Transformer Block | `kernel/llm/transformer.c` | ✅ 7.4 |
+| **Full Model Forward Pass** | `kernel/llm/model.c` | ✅ **7.5** |
 | Framebuffer / Font | `kernel/gfx/` | ✅ |
-| GUI Input | `kernel/gui/input.c` | ✅ |
-| **GUI Input Wiring** | `kernel/gui/input_wiring.c` | ✅ **Phase 10.3** |
-| Window Manager | `kernel/gui/wm.c` | ✅ drag+resize |
-| Desktop / Taskbar / Start Menu | `kernel/gui/desktop.c` etc. | ✅ Phase 10.5 |
-| **startx shell command** | `kernel/shell/shell.c` | ✅ **Phase 10.6** |
-| GPU driver | — | ⬜ Phase 6 |
-| Model forward pass | `kernel/llm/model.c` | ⬜ **NEXT → Phase 7.5** |
+| GUI Input + Wiring | `kernel/gui/input*.c` | ✅ 10.3 |
+| Window Manager | `kernel/gui/wm.c` | ✅ 10.4 |
+| Desktop / Taskbar / Start Menu | `kernel/gui/` | ✅ 10.5 |
+| startx command | `kernel/shell/shell.c` | ✅ 10.6 |
+| Weight Loader | `kernel/llm/loader.c` | ⬜ **NEXT → 7.6** |
 | GUI Apps | `kernel/apps/` | ⬜ Phase 11 |
 
 ### Immediate Next Steps
 
-1. **Phase 7.5 — Full model forward pass** ← **NEXT**  
-   `kernel/llm/model.c` + `model.h`: `model_config_t`, `aios_model_t` (array of transformer blocks + embedding table + LM-head), `model_forward()`, greedy/temperature/top-k/top-p sampling.
+1. **Phase 7.6 — Weight Loader** ← **NEXT**  
+   `kernel/llm/loader.c` + `loader.h`: parse a GGUF v3 file from VFS, FP16/Q4_K dequant, fill `aios_model_t` weight tensors as zero-copy views into the mapped weight blob.
 
 2. **Phase 11.1 — Notepad app (parallel GUI track)**  
    `kernel/apps/notepad.c` + `.h` — first real GUI application window.
@@ -321,13 +322,13 @@ AIOS/
 │   ├── [gdt/idt/apic/pit/vga/serial/panic/keyboard/mouse]
 │   ├── [pmm/vmm/heap/pci/ahci/fat32/initrd/task/sched/kthread/sync/acpi/simd]
 │   ├── fs/  vfs.c  vfs.h  vfs_initrd.c
-│   ├── shell/  terminal.c  shell.c          ← ✅ startx
+│   ├── shell/  terminal.c  shell.c
 │   ├── gfx/  framebuffer.c  font.c  colors.h
 │   ├── gui/
 │   │   ├── input.c / input.h              ← ✅
-│   │   ├── input_wiring.c / input_wiring.h ← ✅ Phase 10.3
+│   │   ├── input_wiring.c / input_wiring.h ← ✅
 │   │   ├── window.c / window.h            ← ✅
-│   │   ├── wm.c / wm.h                    ← ✅ drag+resize
+│   │   ├── wm.c / wm.h                    ← ✅
 │   │   ├── desktop.c / desktop.h          ← ✅
 │   │   ├── taskbar.c / taskbar.h          ← ✅
 │   │   └── start_menu.c / start_menu.h    ← ✅
@@ -336,8 +337,8 @@ AIOS/
 │   │   ├── ops.c / ops.h                  ← ✅ 7.2
 │   │   ├── attention.c / attention.h      ← ✅ 7.3
 │   │   ├── transformer.c / transformer.h  ← ✅ 7.4
-│   │   ├── model.c / model.h              ← ⬜ NEXT 7.5
-│   │   ├── loader.c / loader.h            ← ⬜ 7.6
+│   │   ├── model.c / model.h              ← ✅ 7.5
+│   │   ├── loader.c / loader.h            ← ⬜ NEXT 7.6
 │   │   ├── tokenizer.c / tokenizer.h      ← ⬜ 7.7
 │   │   ├── quant.c                        ← ⬜ 7.8
 │   │   └── inference.c                    ← ⬜ 7.9
@@ -347,4 +348,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 10.3 complete (GUI input wiring: `input_wiring.c/h`, `keyboard_set_gui_callback`, `mouse_set_gui_callback`). Phase 10.6 complete (`startx` in `shell.c`: activates wiring, spawns `gui_wm` kthread). GUI subsystem fully wired end-to-end. Next: Phase 7.5 — full model forward pass (`kernel/llm/model.c`).*
+*Last updated: May 2026 — Phase 7.5 complete (`model.c/h`: embed→blocks→norm→LM-head forward pass + greedy/top-k/top-p sampling). Next: Phase 7.6 — GGUF weight loader (`kernel/llm/loader.c`).*
