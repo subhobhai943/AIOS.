@@ -179,10 +179,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 7.7 — Tokenizer
 - ✅ `kernel/llm/tokenizer.c`, `kernel/llm/tokenizer.h`
-- ✅ `tokenizer_build()` — vocab + BPE merge table + O(1) hash lookup
-- ✅ `tokenizer_encode()` — SentencePiece ▁ prefix, BPE merge loop, BOS/EOS
-- ✅ `tokenizer_decode()` — ▁→space, <0xNN> byte-fallback, BOS/EOS strip
-- ✅ `tokenizer_str_to_token()` / `tokenizer_token_to_str()`
+- ✅ BPE encode/decode, SentencePiece ▁ prefix, byte-fallback, BOS/EOS
 
 ### 7.8 — Quantization
 - ⬜ `kernel/llm/quant.c` — Q8_0, Q4_K dequant, mixed-precision matmul
@@ -229,7 +226,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ## Phase 11 — Basic GUI Applications
 
 ### 11.1 — Notepad
-- ⬜ `kernel/apps/notepad.c` — multiline edit, VFS open/save
+- ✅ `kernel/apps/notepad.c`, `kernel/apps/notepad.h`
+- ✅ Gap buffer — O(1) insert/delete at cursor
+- ✅ Keyboard: printable chars, Enter, Backspace, Delete, arrows, Home/End, PgUp/PgDn
+- ✅ Ctrl+N (new), Ctrl+S (save), Ctrl+A (select all)
+- ✅ VFS load on open, VFS save on Ctrl+S
+- ✅ Line-number gutter, blinking cursor, status bar (Ln/Col + filename + modified dot)
+- ✅ Integrated with WM via `wm_create_window` / `wm_get_fb` / `wm_dirty`
 
 ### 11.2 — File Explorer
 - ⬜ `kernel/apps/explorer.c` — two-pane VFS browser
@@ -266,22 +269,18 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Transformer Block | `llm/transformer.c` | ✅ 7.4 |
 | Model Forward + Sampling | `llm/model.c` | ✅ 7.5 |
 | Weight Loader | `llm/loader.c` | ✅ 7.6 |
-| **Tokenizer** | `llm/tokenizer.c` | ✅ **7.7** |
-| Quantization | `llm/quant.c` | ⬜ **NEXT → 7.8** |
-| Inference Manager | `llm/inference.c` | ⬜ 7.9 |
-| Framebuffer / Font / GUI | `gfx/`, `gui/` | ✅ 10.1–10.6 |
-| GUI Apps | `kernel/apps/` | ⬜ Phase 11 |
+| Tokenizer | `llm/tokenizer.c` | ✅ 7.7 |
+| **Notepad** | `apps/notepad.c` | ✅ **11.1** |
+| Quantization | `llm/quant.c` | ⬜ 7.8 |
+| File Explorer | `apps/explorer.c` | ⬜ **NEXT → 11.2** |
 
 ### Immediate Next Steps
 
-1. **Phase 7.8 — Quantization** ← **NEXT**  
-   `kernel/llm/quant.c` + `quant.h`: runtime Q8_0 + Q4_K dequant helpers,
-   mixed-precision matmul dispatch (selects quantised path when weight tensor
-   is still in raw quantised form, dequantising on-the-fly per block to save
-   memory bandwidth vs the all-F32 arena used by the loader).
+1. **Phase 11.2 — File Explorer** ← **NEXT (GUI track)**  
+   `kernel/apps/explorer.c` — two-pane VFS browser: left pane = directory tree, right pane = file list. Double-click dir to navigate, double-click file to open in Notepad.
 
-2. **Phase 11.1 — Notepad app (parallel GUI track)**  
-   `kernel/apps/notepad.c` — first real GUI application window.
+2. **Phase 7.8 — Quantization** (LLM track)  
+   `kernel/llm/quant.c` — on-the-fly Q8_0/Q4_K dequant matmul.
 
 ---
 
@@ -309,10 +308,17 @@ kernel/llm/
   model.c/h       ← ✅ 7.5
   loader.c/h      ← ✅ 7.6
   tokenizer.c/h   ← ✅ 7.7
-  quant.c/h       ← ⬜ NEXT 7.8
+  quant.c/h       ← ⬜ 7.8
   inference.c/h   ← ⬜ 7.9
+
+kernel/apps/
+  notepad.c/h     ← ✅ 11.1
+  explorer.c/h    ← ⬜ NEXT 11.2
+  terminal_gui.c  ← ⬜ 11.3
+  settings.c      ← ⬜ 11.4
+  ai_chat.c       ← ⬜ 11.5
 ```
 
 ---
 
-*Last updated: May 2026 — Phase 7.7 complete (BPE tokenizer: SentencePiece ▁ prefix, O(1) merge hash table, encode/decode, byte-fallback, BOS/EOS). Next: Phase 7.8 — Quantization (`kernel/llm/quant.c`).*
+*Last updated: May 2026 — Phase 11.1 complete (Notepad: gap buffer, full keyboard handling, VFS open/save, line gutter, blinking cursor, status bar). Next: Phase 11.2 — File Explorer (`kernel/apps/explorer.c`).*
