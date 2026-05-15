@@ -175,14 +175,14 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 7.6 — Weight Loader
 - ✅ `kernel/llm/loader.c`, `kernel/llm/loader.h`
-- ✅ GGUF v2/v3 magic + header parse, KV skip, tensor info entries
-- ✅ FP32 direct view, FP16 dequant, Q8_0 dequant, Q4_K dequant
-- ✅ `loader_load()` — reads from VFS, fills `aios_model_t` tensor views
-- ✅ `loader_close()` — frees float_arena + raw_blob
-- ✅ `loader_err_str()` — human-readable error strings for shell
+- ✅ GGUF v2/v3 parse, FP32/FP16/Q8_0/Q4_K dequant, zero-copy tensor views
 
 ### 7.7 — Tokenizer
-- ⬜ `kernel/llm/tokenizer.c` — BPE, encode/decode, special tokens
+- ✅ `kernel/llm/tokenizer.c`, `kernel/llm/tokenizer.h`
+- ✅ `tokenizer_build()` — vocab + BPE merge table + O(1) hash lookup
+- ✅ `tokenizer_encode()` — SentencePiece ▁ prefix, BPE merge loop, BOS/EOS
+- ✅ `tokenizer_decode()` — ▁→space, <0xNN> byte-fallback, BOS/EOS strip
+- ✅ `tokenizer_str_to_token()` / `tokenizer_token_to_str()`
 
 ### 7.8 — Quantization
 - ⬜ `kernel/llm/quant.c` — Q8_0, Q4_K dequant, mixed-precision matmul
@@ -265,18 +265,23 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Attention + KV-Cache | `llm/attention.c` | ✅ 7.3 |
 | Transformer Block | `llm/transformer.c` | ✅ 7.4 |
 | Model Forward + Sampling | `llm/model.c` | ✅ 7.5 |
-| **Weight Loader** | `llm/loader.c` | ✅ **7.6** |
+| Weight Loader | `llm/loader.c` | ✅ 7.6 |
+| **Tokenizer** | `llm/tokenizer.c` | ✅ **7.7** |
+| Quantization | `llm/quant.c` | ⬜ **NEXT → 7.8** |
+| Inference Manager | `llm/inference.c` | ⬜ 7.9 |
 | Framebuffer / Font / GUI | `gfx/`, `gui/` | ✅ 10.1–10.6 |
-| Tokenizer | `llm/tokenizer.c` | ⬜ **NEXT → 7.7** |
 | GUI Apps | `kernel/apps/` | ⬜ Phase 11 |
 
 ### Immediate Next Steps
 
-1. **Phase 7.7 — Tokenizer** ← **NEXT**  
-   `kernel/llm/tokenizer.c` + `tokenizer.h`: BPE byte-pair encoding, `tokenizer_encode(text, ids[])`, `tokenizer_decode(ids[], text)`, special tokens (`<s>`, `</s>`, `<unk>`).
+1. **Phase 7.8 — Quantization** ← **NEXT**  
+   `kernel/llm/quant.c` + `quant.h`: runtime Q8_0 + Q4_K dequant helpers,
+   mixed-precision matmul dispatch (selects quantised path when weight tensor
+   is still in raw quantised form, dequantising on-the-fly per block to save
+   memory bandwidth vs the all-F32 arena used by the loader).
 
 2. **Phase 11.1 — Notepad app (parallel GUI track)**  
-   `kernel/apps/notepad.c` + `.h` — first real GUI application.
+   `kernel/apps/notepad.c` — first real GUI application window.
 
 ---
 
@@ -303,11 +308,11 @@ kernel/llm/
   transformer.c/h ← ✅ 7.4
   model.c/h       ← ✅ 7.5
   loader.c/h      ← ✅ 7.6
-  tokenizer.c/h   ← ⬜ NEXT 7.7
-  quant.c         ← ⬜ 7.8
-  inference.c     ← ⬜ 7.9
+  tokenizer.c/h   ← ✅ 7.7
+  quant.c/h       ← ⬜ NEXT 7.8
+  inference.c/h   ← ⬜ 7.9
 ```
 
 ---
 
-*Last updated: May 2026 — Phase 7.6 complete (GGUF v2/v3 loader: FP32/FP16/Q8_0/Q4_K dequant, zero-copy tensor views into `aios_model_t`). Next: Phase 7.7 — BPE tokenizer (`kernel/llm/tokenizer.c`).*
+*Last updated: May 2026 — Phase 7.7 complete (BPE tokenizer: SentencePiece ▁ prefix, O(1) merge hash table, encode/decode, byte-fallback, BOS/EOS). Next: Phase 7.8 — Quantization (`kernel/llm/quant.c`).*
