@@ -165,23 +165,21 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 7.3 — Attention + KV-Cache
 - ✅ `kernel/llm/attention.c`, `kernel/llm/attention.h`
-- ✅ `attn_config_t`, `kv_cache_t`, `kvcache_alloc/free/reset`
-- ✅ `attn_forward` (causal MHA, RoPE, GQA), `attn_forward_full` (prefill wrapper)
 
 ### 7.4 — Transformer Block
 - ✅ `kernel/llm/transformer.c`, `kernel/llm/transformer.h`
-- ✅ GPT-2 post-norm (LayerNorm + GELU MLP) and LLaMA pre-norm (RMSNorm + SwiGLU)
-- ✅ `transformer_block_forward` — single-token step, zero heap leak
 
 ### 7.5 — Full Model Forward Pass
 - ✅ `kernel/llm/model.c`, `kernel/llm/model.h`
-- ✅ `model_config_t`, `model_arch_t`, `sample_config_t`, `aios_model_t`
-- ✅ `model_alloc` / `model_free` / `model_reset_kvcache`
-- ✅ `model_forward` — embed → N blocks → final norm → LM-head logits
-- ✅ `model_sample` — greedy / temperature / top-k / top-p (nucleus)
+- ✅ `model_forward`, `model_sample` (greedy / top-k / top-p)
 
 ### 7.6 — Weight Loader
-- ⬜ `kernel/llm/loader.c` — GGUF or custom binary, FP16/Q4
+- ✅ `kernel/llm/loader.c`, `kernel/llm/loader.h`
+- ✅ GGUF v2/v3 magic + header parse, KV skip, tensor info entries
+- ✅ FP32 direct view, FP16 dequant, Q8_0 dequant, Q4_K dequant
+- ✅ `loader_load()` — reads from VFS, fills `aios_model_t` tensor views
+- ✅ `loader_close()` — frees float_arena + raw_blob
+- ✅ `loader_err_str()` — human-readable error strings for shell
 
 ### 7.7 — Tokenizer
 - ⬜ `kernel/llm/tokenizer.c` — BPE, encode/decode, special tokens
@@ -207,34 +205,24 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ## Phase 10 — Graphical User Interface
 
 ### 10.1 — Framebuffer & Primitives
-- ✅ `kernel/gfx/framebuffer.c`, `kernel/gfx/colors.h` — MB2 parse, 32-bit ARGB
+- ✅ `kernel/gfx/framebuffer.c`, `kernel/gfx/colors.h`
 
 ### 10.2 — Font & Text Rendering
-- ✅ `kernel/gfx/font.c`, `kernel/gfx/font.h` — 8×16 bitmap font
+- ✅ `kernel/gfx/font.c`, `kernel/gfx/font.h`
 - ⬜ `assets/fonts/` PSF richer font set
 
 ### 10.3 — GUI Input Wiring
-- ✅ `kernel/gui/input.c`, `kernel/gui/input.h` — event ring buffer, double-click, clamping
-- ✅ `kernel/gui/input_wiring.c`, `kernel/gui/input_wiring.h` — activation fence
-- ✅ `keyboard_set_gui_callback()` in `keyboard.c`
-- ✅ `mouse_set_gui_callback()` in `mouse.c`
-- ✅ `gui_wiring_activate()` called from `startx` shell command
+- ✅ All complete (input.c, input_wiring.c, keyboard/mouse hooks)
 
 ### 10.4 — Window Manager Core
-- ✅ `kernel/gui/window.c`, `kernel/gui/window.h` — z-ordered list, create/destroy
-- ✅ `kernel/gui/wm.c` — render loop, hit-test, activation
-- ✅ Title-bar drag state machine (`DRAG_MOVE` in `wm.c`)
-- ✅ Border resize grip state machine (`DRAG_RESIZE` in `wm.c`)
+- ✅ `kernel/gui/wm.c` — render loop, drag, resize
 
 ### 10.5 — Desktop, Taskbar & Start Menu
-- ✅ `kernel/gui/desktop.c`, `kernel/gui/desktop.h` — background + logo blit
-- ✅ `kernel/gui/taskbar.c`, `kernel/gui/taskbar.h` — 32–40 px strip, Start button, window buttons
-- ✅ `kernel/gui/start_menu.c`, `kernel/gui/start_menu.h` — vertical app-launch menu
+- ✅ All complete
 
 ### 10.6 — GUI Kernel Thread & Mode Switch
-- ✅ `gui_wm_start()` kthread spawned by `startx` shell command
-- ✅ `startx` command in `shell.c`: wiring → WM spawn → async desktop
-- ⬜ TTY switch key (e.g. Ctrl+Alt+F1) to return focus to shell terminal
+- ✅ `gui_wm_start()` + `startx` in `shell.c`
+- ⬜ TTY switch key (Ctrl+Alt+F1)
 
 ---
 
@@ -266,33 +254,29 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 | Component | Files | Status |
 |-----------|-------|--------|
-| Build / boot / GDT / IDT | — | ✅ |
-| APIC / PIT / VGA / Serial | — | ✅ |
-| Keyboard + Mouse | `keyboard.c`, `mouse.c` | ✅ + GUI hooks |
+| Boot / GDT / IDT / APIC / PIT | — | ✅ |
+| VGA / Serial / Keyboard / Mouse | — | ✅ |
 | PMM / VMM / Heap | — | ✅ |
 | PCI / AHCI / FAT32 / VFS / Initrd | — | ✅ |
-| Task / Scheduler / kthread / Sync | — | ✅ |
-| Terminal / Shell / ACPI | — | ✅ |
+| Task / Sched / kthread / Sync / ACPI | — | ✅ |
+| Shell + Terminal | `shell/` | ✅ + startx |
 | CPU SIMD | `kernel/simd.c` | ✅ |
-| Tensor + Ops | `kernel/llm/tensor.c`, `ops.c` | ✅ 7.1–7.2 |
-| Attention + KV-Cache | `kernel/llm/attention.c` | ✅ 7.3 |
-| Transformer Block | `kernel/llm/transformer.c` | ✅ 7.4 |
-| **Full Model Forward Pass** | `kernel/llm/model.c` | ✅ **7.5** |
-| Framebuffer / Font | `kernel/gfx/` | ✅ |
-| GUI Input + Wiring | `kernel/gui/input*.c` | ✅ 10.3 |
-| Window Manager | `kernel/gui/wm.c` | ✅ 10.4 |
-| Desktop / Taskbar / Start Menu | `kernel/gui/` | ✅ 10.5 |
-| startx command | `kernel/shell/shell.c` | ✅ 10.6 |
-| Weight Loader | `kernel/llm/loader.c` | ⬜ **NEXT → 7.6** |
+| Tensor + Ops | `llm/tensor.c`, `ops.c` | ✅ 7.1–7.2 |
+| Attention + KV-Cache | `llm/attention.c` | ✅ 7.3 |
+| Transformer Block | `llm/transformer.c` | ✅ 7.4 |
+| Model Forward + Sampling | `llm/model.c` | ✅ 7.5 |
+| **Weight Loader** | `llm/loader.c` | ✅ **7.6** |
+| Framebuffer / Font / GUI | `gfx/`, `gui/` | ✅ 10.1–10.6 |
+| Tokenizer | `llm/tokenizer.c` | ⬜ **NEXT → 7.7** |
 | GUI Apps | `kernel/apps/` | ⬜ Phase 11 |
 
 ### Immediate Next Steps
 
-1. **Phase 7.6 — Weight Loader** ← **NEXT**  
-   `kernel/llm/loader.c` + `loader.h`: parse a GGUF v3 file from VFS, FP16/Q4_K dequant, fill `aios_model_t` weight tensors as zero-copy views into the mapped weight blob.
+1. **Phase 7.7 — Tokenizer** ← **NEXT**  
+   `kernel/llm/tokenizer.c` + `tokenizer.h`: BPE byte-pair encoding, `tokenizer_encode(text, ids[])`, `tokenizer_decode(ids[], text)`, special tokens (`<s>`, `</s>`, `<unk>`).
 
 2. **Phase 11.1 — Notepad app (parallel GUI track)**  
-   `kernel/apps/notepad.c` + `.h` — first real GUI application window.
+   `kernel/apps/notepad.c` + `.h` — first real GUI application.
 
 ---
 
@@ -312,40 +296,18 @@ All heap: kmalloc/kfree (heap.h). Compiler: x86_64-elf-gcc -ffreestanding -nostd
 ## File Structure Reference
 
 ```
-AIOS/
-├── ROADMAP.md
-├── boot/  grub.cfg  kernel_entry.asm  linker.ld
-├── scripts/  check_deps.sh  mkinitrd.py
-├── assets/  tokenizer/vocab.bin  tokenizer/config.bin
-├── kernel/
-│   ├── kernel_main.c
-│   ├── [gdt/idt/apic/pit/vga/serial/panic/keyboard/mouse]
-│   ├── [pmm/vmm/heap/pci/ahci/fat32/initrd/task/sched/kthread/sync/acpi/simd]
-│   ├── fs/  vfs.c  vfs.h  vfs_initrd.c
-│   ├── shell/  terminal.c  shell.c
-│   ├── gfx/  framebuffer.c  font.c  colors.h
-│   ├── gui/
-│   │   ├── input.c / input.h              ← ✅
-│   │   ├── input_wiring.c / input_wiring.h ← ✅
-│   │   ├── window.c / window.h            ← ✅
-│   │   ├── wm.c / wm.h                    ← ✅
-│   │   ├── desktop.c / desktop.h          ← ✅
-│   │   ├── taskbar.c / taskbar.h          ← ✅
-│   │   └── start_menu.c / start_menu.h    ← ✅
-│   ├── llm/
-│   │   ├── tensor.c / tensor.h            ← ✅ 7.1
-│   │   ├── ops.c / ops.h                  ← ✅ 7.2
-│   │   ├── attention.c / attention.h      ← ✅ 7.3
-│   │   ├── transformer.c / transformer.h  ← ✅ 7.4
-│   │   ├── model.c / model.h              ← ✅ 7.5
-│   │   ├── loader.c / loader.h            ← ⬜ NEXT 7.6
-│   │   ├── tokenizer.c / tokenizer.h      ← ⬜ 7.7
-│   │   ├── quant.c                        ← ⬜ 7.8
-│   │   └── inference.c                    ← ⬜ 7.9
-│   └── apps/  (all Phase 11 — not started)
-└── docs/
+kernel/llm/
+  tensor.c/h      ← ✅ 7.1
+  ops.c/h         ← ✅ 7.2
+  attention.c/h   ← ✅ 7.3
+  transformer.c/h ← ✅ 7.4
+  model.c/h       ← ✅ 7.5
+  loader.c/h      ← ✅ 7.6
+  tokenizer.c/h   ← ⬜ NEXT 7.7
+  quant.c         ← ⬜ 7.8
+  inference.c     ← ⬜ 7.9
 ```
 
 ---
 
-*Last updated: May 2026 — Phase 7.5 complete (`model.c/h`: embed→blocks→norm→LM-head forward pass + greedy/top-k/top-p sampling). Next: Phase 7.6 — GGUF weight loader (`kernel/llm/loader.c`).*
+*Last updated: May 2026 — Phase 7.6 complete (GGUF v2/v3 loader: FP32/FP16/Q8_0/Q4_K dequant, zero-copy tensor views into `aios_model_t`). Next: Phase 7.7 — BPE tokenizer (`kernel/llm/tokenizer.c`).*
