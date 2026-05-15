@@ -207,38 +207,18 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 3.3 — FAT32 Filesystem
 - ✅ `kernel/fat32.h` — FAT32 header: `fat32_bpb_t` (packed), `fat32_dir_entry_t` (packed), full public API
-  - ✅ `fat32_init(port, partition_lba)` — parse BPB, validate FAT32, derive geometry + `g_num_fats`, `g_fat_sectors`, `g_total_clusters`
-  - ✅ `fat32_read_cluster(cluster, buf)` — resolve cluster → LBA, call `ahci_read_sectors()`
-  - ✅ `fat32_next_cluster(cluster)` — read FAT sector, extract 28-bit entry (mask `0x0FFFFFFF`)
-  - ✅ `fat32_find_file(dir_cluster, name83, out_cluster, out_size)` — walk dir chain, match 8.3 name
-  - ✅ `fat32_read_file(first_cluster, buf, max_bytes)` — follow cluster chain into caller buffer
-  - ✅ `fat32_find_file_lfn(dir_cluster, name, out_cluster, out_size)` — LFN + 8.3 fallback search
-  - ✅ `fat32_alloc_clusters(count)` — find contiguous free clusters, link as FAT32 chain
-  - ✅ `fat32_free_chain(first_cluster)` — walk chain, mark all entries FAT32_FREE
-  - ✅ `fat32_write_file(first_cluster, buf, size)` — write into existing cluster chain, zero-pad last cluster
-  - ✅ `fat32_create_file(dir_cluster, name83, data, size, out_fc)` — allocate clusters, write data, insert 8.3 dir entry (extends dir cluster if full)
-  - ✅ `fat32_sector0_test()` — print BPB fields to serial, find `/TEST.TXT`, read 64 bytes, hex-dump to COM1
+  - ✅ `fat32_init(port, partition_lba)` — parse BPB, validate FAT32, derive geometry
+  - ✅ `fat32_read_cluster`, `fat32_next_cluster`, `fat32_find_file`, `fat32_read_file`
+  - ✅ `fat32_find_file_lfn`, `fat32_alloc_clusters`, `fat32_free_chain`
+  - ✅ `fat32_write_file`, `fat32_create_file`, `fat32_sector0_test`
 - ✅ VFS abstraction layer: `kernel/fs/vfs.c` + `kernel/fs/vfs.h`
-  - ✅ `vfs_init(root_cluster)` — initialise VFS with FAT32 root cluster
-  - ✅ `vfs_open(path)` — resolve path via `fat32_find_file_lfn`, return fd
-  - ✅ `vfs_read(fd, buf, len)` — read from open file
-  - ✅ `vfs_close(fd)` — release fd slot
-- ✅ `kernel_main` Phase 3.3 block: `fat32_init` + `fat32_sector0_test` + `vfs_open("/TEST.TXT")` smoke-test
+- ✅ `kernel_main` Phase 3.3 block: FAT32 init + sector0 test + VFS smoke-test
 
 ### 3.4 — Initrd / Ramdisk
 - ✅ Pack initial files into a ramdisk (custom `ARDS` flat-binary format) embedded in the ISO
-  - `scripts/mkinitrd.py` — Python3 image builder; output to `boot/initrd.img`
-  - Format: 16-byte header + N×64-byte directory entries + packed file data
-- ✅ Kernel reads ramdisk from multiboot module list (`module2` in `boot/grub.cfg`)
-  - `kernel/mb2_modules.c` — walks MB2 tags, finds type-3 module whose string contains `"initrd"` or is empty
-  - `mb2_find_initrd(mb2_phys, &phys, &size)` called in `kernel_main`
+- ✅ Kernel reads ramdisk from multiboot module list
 - ✅ Mount ramdisk as root filesystem before real disk driver is ready
-  - `kernel/initrd.c` — zero-copy mount: pointer arithmetic into identity-mapped image
-  - `initrd_init()`, `initrd_find()`, `initrd_get_file()`, `initrd_file_count()`
-  - `kernel/fs/vfs_initrd.c` — `/initrd/` prefix shim; `vfs_initrd_open()` + `vfs_initrd_register()`
 - ✅ Put LLM tokenizer vocab and initial config here
-  - `assets/tokenizer/vocab.bin` — placeholder (will be BPE vocab in Phase 7.7)
-  - `assets/tokenizer/config.bin` — `vocab_size=50257`, `model_type=gpt2`, `max_seq_len=1024`
 - ✅ Integration patch documented in `kernel/kernel_main_initrd_patch.md`
 
 ---
@@ -249,45 +229,21 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 
 ### 4.1 — Context Switching
 - ✅ `kernel/task.c` + `kernel/task.h` — task system implemented
-- ✅ Task struct: `pid`, `state` (RUNNING/READY/BLOCKED/DEAD), `rsp`, `stack_base`, `stack_size`, `cr3`, `name`
-- ✅ `task_create(entry_fn, stack_size, name)` — `kmalloc` stack, set up initial register frame
-- ✅ `kernel/switch_context.asm` — NASM `switch_context(curr_rsp_ptr, next_rsp)`: push callee-saved regs, swap RSP, pop regs, ret
-- ✅ `task_destroy(task)` — `kfree` stack, remove from all queues
-- ✅ `task_init()` — initialises task table, registers boot task as PID 0
+- ✅ Task struct: `pid`, `state`, `rsp`, `stack_base`, `stack_size`, `cr3`, `name`
+- ✅ `task_create`, `task_destroy`, `task_init` implemented
+- ✅ `kernel/switch_context.asm` — NASM callee-saved register swap
 
 ### 4.2 — Scheduler
 - ✅ `kernel/sched.c` + `kernel/sched.h` — preemptive round-robin scheduler
-- ✅ Ready queue: circular doubly-linked list of runnable tasks
-- ✅ PIT IRQ handler calls `sched_tick()` every tick → picks next task → `switch_context()`
-- ✅ `sched_yield()` — voluntarily gives up CPU time slice
-- ✅ `sched_sleep(ms)` — puts task in sleep queue, woken by timer when deadline passes
-- ✅ `sched_exit()` — marks task DEAD, removed from ready queue on next tick
-- ✅ Idle task: runs `hlt` in a loop when no other task is ready
-- ✅ `sched_add(task)` — enqueue a task into the ready queue
-- ✅ Test: 3 tasks (A/B/C) created in `kernel_main`, each prints its letter and sleeps 250 ms, interleaved output on VGA proves preemption
+- ✅ Ready queue, `sched_tick`, `sched_yield`, `sched_sleep`, `sched_exit`, idle task
+- ✅ Test: 3 tasks interleaved on VGA proves preemption
 
 ### 4.3 — Kernel Threads
-- ✅ `kthread_create(fn, arg)` — convenience wrapper: creates a kernel-mode thread, adds to scheduler
-  - `kernel/kthread.c` + `kernel/kthread.h`
-  - `kthread_t` handle type; `kthread_create(fn, arg, stack_size, name)` → `kthread_t`
-  - Internally calls `task_create` + `sched_add`; returns opaque handle
-- ✅ `kthread_exit()` — calls `sched_exit()` from within the thread
-- ✅ `kthread_join(t)` — spins (yield-based) until target thread reaches DEAD state
-- ✅ All early kernel services can now run as kthreads (LLM inference thread, I/O threads)
-- ✅ Smoke-test in `kernel_main`: one kthread created, prints a banner, exits; `kthread_join` confirms it finished
+- ✅ `kernel/kthread.c` + `kernel/kthread.h` — `kthread_create`, `kthread_exit`, `kthread_join`
 
 ### 4.4 — Synchronization Primitives
-- ✅ Spinlock: `spinlock_t`, `spin_lock()`, `spin_unlock()`, `spin_try_lock()` using atomic `lock xchgl`
-  - `kernel/sync.c` + `kernel/sync.h`
-  - IRQ-safe variants: `spin_lock_irqsave()` / `spin_unlock_irqrestore()` save/restore RFLAGS
-  - `cpu_pause()` inside spin loops — reduces memory-bus pressure on hyperthreaded cores
-- ✅ Mutex: `mutex_t`, `mutex_lock()` (yield-spins; never busy-waits), `mutex_unlock()`, `mutex_try_lock()`
-  - Waiter list (`waiters[MUTEX_WAITER_MAX]`) tracks blocked PIDs for future sleep-based upgrade
-  - `guard` spinlock protects waiter list mutations; owner PID stored for debugging
-- ✅ Semaphore: `sem_t`, `sem_wait()` (blocks via `sched_yield()` if count==0), `sem_post()`, `sem_trywait()`, `sem_value()`
-  - Counting semaphore; `sem_init(s, initial_count)` for both mutex-style (1) and producer/consumer (N) uses
-  - Used by LLM inference pipeline: producer kthread posts when a token is ready, shell kthread waits
-- ✅ All three primitives are IRQ-context-safe for spinlock; mutex/semaphore must not be called from ISR context
+- ✅ Spinlock (xchg + irqsave), Mutex (yield-spin + waiter list), Semaphore (counting)
+  — `kernel/sync.c` + `kernel/sync.h`
 
 ### 4.5 — User Mode (Ring 3)
 - ⬜ TSS set up with kernel stack pointer (RSP0) per task
@@ -303,48 +259,13 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 > Goal: An interactive shell that users can type into, and which can invoke built-in commands including the AI assistant.
 
 ### 5.1 — Terminal Emulator
-- ✅ Created `kernel/shell/terminal.c` + `kernel/shell/terminal.h`
-- ✅ Ring buffer for input characters (keyboard → terminal)
-  - SPSC lock-free ring (`TERM_INPUT_BUF=256`, power-of-2 mask); ISR-safe via `spin_lock_irqsave`
-  - `terminal_feed(key)` callable from keyboard ISR; `ring_dequeue()` yields CPU while empty
-- ✅ Line editing: backspace, left/right arrows, home/end, Del key
-  - In-place insert/delete with `kmemmove`; full-line redraw after every edit
-- ✅ History buffer: up/down arrows cycle through previous commands (32 entries, 256 chars each)
-  - Live draft saved when user first presses ↑; restored on ↓ back past entry 0
-- ✅ `terminal_readline(buf, maxlen)` — blocking read until Enter pressed (calls `sched_yield()` while empty)
-- ✅ ANSI escape code emitter: `term_move_cursor(col, row)`, `term_set_color(fg, bg)`, `term_clear_line()`
-  - Uses CRTC registers directly (no ANSI parser needed in VGA text mode)
-  - Added `vga_set_cursor`, `vga_get_cursor`, `vga_putchar_at` to VGA driver (`kernel/vga_phase51.c`)
-- ✅ `terminal_init()` called from `kernel_main` after sync primitives
-  - Keyboard ISR extended-scancode wiring documented in `kernel/shell/terminal_kernel_main_patch.md`
+- ✅ `kernel/shell/terminal.c` + `kernel/shell/terminal.h` — complete
 
 ### 5.2 — Shell
-- ✅ Created `kernel/shell/shell.c` + `kernel/shell/shell.h`
-- ✅ Print prompt: `AIOS> ` (light-green, resets to white for input)
-- ✅ Parse command line: tokenize by spaces, handle single-quoted strings (`'hello world'` → one token)
-- ✅ Built-in commands:
-  - ✅ `help` — list commands with usage + description, colour-coded
-  - ✅ `clear` — `vga_clear()`
-  - ✅ `echo <args...>` — print arguments to screen
-  - ✅ `mem` — PMM total/used/free pages (MB) + heap used/free (KB)
-  - ✅ `ps` — list all tasks: PID, state (RUNNING/READY/BLOCKED/SLEEPING/DEAD), name
-  - ✅ `ls [path]` — initrd file listing (default); FAT32 dir listing if path given
-  - ✅ `cat <file>` — initrd or VFS/FAT32 file, printable chars + `.` substitution, 4 KB limit
-  - ✅ `hexdump <file>` — classic 16-byte rows, hex + ASCII, first 256 bytes
-  - ✅ `load <model>` — opens file via VFS, confirms existence; loader stub (Phase 7.6)
-  - ✅ `ai <prompt...>` — echoes prompt + inference stub message (Phase 7.9)
-  - ✅ `chat` — interactive multi-turn loop (type `exit` to return); inference stub (Phase 7.9)
-  - ✅ `reboot` — PS/2 controller reset pulse; triple-fault fallback; ACPI path at Phase 5.3
-  - ✅ `shutdown` — QEMU ACPI port 0x604/0xB004/0x600; ACPI FADT path at Phase 5.3
-- ✅ `shell_run(void *arg)` kthread entry — launched via `kthread_create(shell_run, NULL, 65536, "shell")`
-- ✅ Wiring + API additions documented in `kernel/shell/shell_kernel_main_patch.md`
+- ✅ `kernel/shell/shell.c` + `kernel/shell/shell.h` — complete with all built-in commands
 
 ### 5.3 — ACPI
-- ✅ Create `kernel/acpi.c` + `kernel/acpi.h`
-- ✅ Find RSDP in BIOS area or EFI config table
-- ✅ Parse RSDT/XSDT to find FADT
-- ✅ `acpi_shutdown()` — write SLP_TYPa + SLP_EN to PM1a_CNT
-- ✅ `acpi_reboot()` — write to RESET_REG in FADT
+- ✅ `kernel/acpi.c` + `kernel/acpi.h` — RSDP scan, RSDT/XSDT, FADT, shutdown/reboot
 
 ---
 
@@ -366,19 +287,11 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 ### 6.3 — AMD GPU Driver (Recommended — Open Docs)
 - ⬜ Create `kernel/gpu/amdgpu.c`
 - ⬜ Initialize GFX engine: read golden registers, configure compute queues
-- ⬜ `gpu_alloc_vram(size)` → virtual address in VRAM
-- ⬜ `gpu_copy_to_vram(host_ptr, gpu_ptr, size)` — DMA host→GPU
-- ⬜ `gpu_copy_from_vram(gpu_ptr, host_ptr, size)` — DMA GPU→host
+- ⬜ `gpu_alloc_vram(size)`, `gpu_copy_to_vram`, `gpu_copy_from_vram`
 - ⬜ Submit compute shader (GCN/RDNA microcode) for matrix multiply
 
 ### 6.4 — CPU SIMD Fallback (Always Required)
-- ✅ Created `kernel/simd.c` + `kernel/simd.h`
-- ✅ Detect CPU features via CPUID: SSE2, AVX, AVX2, AVX-512
-- ✅ `simd_matmul_f32(A, B, C, M, N, K)` — matrix multiply using AVX2 intrinsics
-- ✅ `simd_vec_add_f32(a, b, out, len)` — vectorized vector add
-- ✅ `simd_softmax_f32(x, out, len)` — softmax with max-subtraction for stability
-- ✅ `simd_gelu_f32(x, out, len)` — GELU activation (polynomial approximation)
-- ✅ All buffers 32-byte aligned (`kmalloc_aligned(size, 32)`)
+- ✅ `kernel/simd.c` + `kernel/simd.h` — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc
 
 ---
 
@@ -387,25 +300,33 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 > Goal: Run a transformer model (GPT-2 scale to start) natively in the OS with no external dependencies.
 
 ### 7.1 — Tensor Library
-- ✅ Create `kernel/llm/tensor.c` + `kernel/llm/tensor.h`
-- ✅ Tensor struct: `float* data`, `int32_t dims[4]`, `int32_t ndim`, `size_t numel`
-- ✅ `tensor_alloc(dims, ndim)`, `tensor_free(t)`, `tensor_reshape()`, `tensor_slice()`, `tensor_print()` — implemented using `kmalloc`/`kfree`, no libc, debug print via `klog()`
+- ✅ `kernel/llm/tensor.c` + `kernel/llm/tensor.h`
+- ✅ `tensor_alloc`, `tensor_free`, `tensor_reshape`, `tensor_slice`, `tensor_print` — no libc
 
 ### 7.2 — Math Operations (CPU Path)
-- ✅ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
+- ✅ `kernel/llm/ops.c` + `kernel/llm/ops.h`
 - ✅ `ops_matmul`, `ops_add`, `ops_scale`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
-- ✅ `ops_embedding_lookup` — gather rows from weight table
-- ✅ `ops_rope(q, k, pos)` — Rotary Position Embedding (LLaMA)
+- ✅ `ops_embedding_lookup`, `ops_rope(q, k, pos)` — Rotary Position Embedding
 
 ### 7.3 — Attention Mechanism
-- ⬜ Create `kernel/llm/attention.c`
-- ⬜ Multi-Head Attention: Q/K/V projections, scaled dot-product, causal mask, softmax, output projection
-- ⬜ KV-Cache: allocate `kv_cache[layers][2][max_seq][head_dim*heads]`, append K/V per token
+- ✅ Created `kernel/llm/attention.c` + `kernel/llm/attention.h`
+- ✅ `attn_config_t` — holds `n_heads`, `n_kv_heads`, `n_embd`, `max_seq_len`, `n_layers`
+- ✅ `kv_cache_t` — flat float arrays `k`/`v` laid out as `[layers][kv_heads][max_seq][head_dim]`
+- ✅ `kvcache_alloc(cfg)` / `kvcache_free(kvc)` / `kvcache_reset(kvc)` via `kmalloc_aligned`
+- ✅ `attn_forward(...)` — single-token causal MHA: Q/K/V project → RoPE → KV-cache write → scaled dot-product → softmax → weighted V sum → output projection
+- ✅ `attn_forward_full(...)` — prefill wrapper for sequences; delegates to `attn_forward()` per token
+- ✅ GQA/MQA support: KV head index = `h * n_kv_heads / n_heads`
+- ✅ Numerically stable softmax via `__builtin_expf` (no libm required)
 
 ### 7.4 — Transformer Block
-- ⬜ Create `kernel/llm/transformer.c`
-- ⬜ GPT-2 style (post-norm): LayerNorm1 → Attention → residual; LayerNorm2 → MLP → residual
-- ⬜ LLaMA style (pre-norm, RMSNorm) variant switchable via config
+- ✅ Created `kernel/llm/transformer.c` + `kernel/llm/transformer.h`
+- ✅ `transformer_block_t` — weight pointers for one layer (norm1/2 gamma/beta, Wq/Wk/Wv/Wo, W1/W2/b1/b2, biases)
+- ✅ GPT-2 style post-norm: `LayerNorm1 → Attention → residual add; LayerNorm2 → MLP → residual add`
+- ✅ LLaMA style pre-norm (RMSNorm): `RMSNorm → Attention → residual; RMSNorm → MLP → residual`
+- ✅ Style switchable at runtime via `TRANSFORMER_STYLE_GPT2` / `TRANSFORMER_STYLE_LLAMA` in config
+- ✅ MLP: `W1 * x + b1 → GELU → W2 * h + b2` (GPT-2) or `SwiGLU gate×up→down` (LLaMA)
+- ✅ `transformer_block_forward(block, cfg, x, out, kvc, layer, pos)` — single-token step
+- ✅ All scratch buffers `kmalloc_aligned(..., 32)` / `kfree_aligned`; zero heap leak on return
 
 ### 7.5 — Full Model Forward Pass
 - ⬜ Create `kernel/llm/model.c` + `kernel/llm/model.h`
@@ -473,64 +394,33 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 > Goal: Windows-style desktop environment on top of AIOS, using the existing mouse, keyboard, and framebuffer infrastructure.
 
 ### 10.1 — Framebuffer & Primitive Drawing
-- ✅ Implement `kernel/gfx/framebuffer.c` + `kernel/gfx/framebuffer.h`
-  - Parse Multiboot2 framebuffer tag and expose a `framebuffer_t` struct (width, height, pitch, bpp, pixel_format)
-  - Implement `fb_init_from_multiboot(mb2_info)` to switch from VGA text mode to linear framebuffer mode during early boot
-- ✅ Provide basic drawing APIs:
-  - `fb_put_pixel(x, y, color)` — assume 32-bit ARGB for first implementation
-  - `fb_clear(color)` — fill entire screen
-  - `fb_fill_rect(x, y, w, h, color)` — solid rectangles (used for windows, taskbar, buttons)
-  - `fb_draw_rect(x, y, w, h, color)` — 1-pixel border rectangles
-  - `fb_blit(x, y, w, h, const uint32_t* src)` — blit RGBA buffers (icons, pre-rendered glyphs)
-- ✅ Decide on a simple color constants header (`kernel/gfx/colors.h`) for standard UI colors (background, window, accent).
+- ✅ `kernel/gfx/framebuffer.c` + `.h` + `colors.h` — MB2 tag parse + 32-bit ARGB primitives
 
 ### 10.2 — Font & Text Rendering
-- ✅ Implement `kernel/gfx/font.c` + `kernel/gfx/font.h`:
-  - `font_load_builtin()` — returns a pointer to an in-memory 8×16 debug font description
-  - `font_draw_char(fb, font, x, y, ch, fg, bg)` — render a single character into the framebuffer using a small bitmap glyph table
-  - `font_draw_string(fb, font, x, y, const char* s, fg, bg)` — draw a single-line string (newline terminates)
-  - `font_draw_string_centered(fb, font, region_x, region_y, region_w, s, fg, bg)` — helper for centered labels with `...` truncation when the text does not fit
-- ⬜ Add `assets/fonts/` with a richer bitmap font set (e.g., full ASCII, different sizes) in a simple binary or PSF format for future theming.
+- ✅ `kernel/gfx/font.c` + `kernel/gfx/font.h` — builtin 8×16 font + string/label drawing
+- ⬜ Add `assets/fonts/` with a richer bitmap font set (PSF format) for future theming
 
 ### 10.3 — GUI Event Model
-- 🔄 Create a generic GUI input abstraction in `kernel/gui/input.c` + `kernel/gui/input.h`:
-  - ✅ Convert raw mouse/keyboard data into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP` via a single ring buffer of `gui_event_t`.
-  - ✅ Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1) with clamping logic in `gui_input_update_mouse_pos_locked`.
-  - ✅ Support left/right (and middle) button tracking and naive double-click detection (timestamp + small position delta) flagged via `GUI_MOUSE_FLAG_DOUBLE_CLICK` on `GUI_EVENT_MOUSE_DOWN`.
-- ⬜ Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active.
+- 🔄 `kernel/gui/input.c` + `kernel/gui/input.h`
+  - ✅ `gui_event_t` ring buffer, mouse position clamping, double-click detection
+  - ⬜ Wire `mouse.c` / `keyboard.c` to call `gui_input_push_*` when GUI mode is active
 
 ### 10.4 — Window Manager Core
-- 🔄 Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
-  - ✅ `gui_window_t` struct: `id`, `title`, `x`, `y`, `width`, `height`, `state` (normal/moving/resizing/minimized/hidden), `is_active`, `draw_callback`, `event_callback`, user data pointer.
-  - ✅ `gui_create_window(x, y, w, h, const char* title, draw_callback, event_callback, void* user_data)` — registers a new window (kmalloc’d) and inserts it at the front of a doubly-linked z-ordered list.
-  - ✅ `gui_destroy_window(win)` — removes a window from internal lists and frees it.
-- 🔄 Render loop in `kernel/gui/wm.c`:
-  - ✅ Maintain a z-ordered list of windows; top-most window is active.
-  - ✅ For each frame: clear desktop background, draw a top banner, then draw all windows from back to front.
-  - ✅ For each window: draw a simple frame (title bar, border, body background) and invoke `draw_callback` to render the client area.
-- 🔄 Hit-testing and interaction:
-  - ✅ On mouse-down, hit-test windows from top to bottom (current simple linear search) and bring the first hit to front, marking it active.
-  - ⬜ Add proper title-bar region detection and dragging/resizing state transitions.
+- 🔄 `kernel/gui/window.c` + `kernel/gui/window.h` + `kernel/gui/wm.c`
+  - ✅ `gui_window_t` struct, z-ordered list, `gui_create_window`, `gui_destroy_window`
+  - ✅ Render loop: clear → draw desktop banner → draw windows back-to-front
+  - ✅ Mouse-down hit-test and activation
+  - ⬜ Title-bar drag / resize state transitions
 
 ### 10.5 — Desktop, Taskbar & Start Menu
-- ⬜ Implement `kernel/gui/desktop.c`:
-  - Draw a solid background color or simple gradient.
-  - Optional: support a static AIOS logo bitmap at the center or corner using `fb_blit`.
-- ⬜ Implement `kernel/gui/taskbar.c` + `kernel/gui/taskbar.h`:
-  - Reserve a bottom-of-screen strip (e.g., 32–40 px height) for the taskbar.
-  - Left side: draw a "Start" button styled after classic Windows (text label or icon) that can be clicked.
-  - Middle/right: draw rectangular buttons for each open window (window title truncated), highlighting the active window.
-- ⬜ Implement a simple start menu in `kernel/gui/start_menu.c`:
-  - When the Start button is clicked, open a vertical menu above it with entries for basic apps (File Explorer, Notepad, Terminal, Settings, AI Chat).
-  - On menu item click, launch or focus the corresponding app window.
+- ⬜ `kernel/gui/desktop.c` — solid background + optional AIOS logo blit
+- ⬜ `kernel/gui/taskbar.c` + `.h` — 32–40 px bottom strip, Start button, per-window buttons
+- ⬜ `kernel/gui/start_menu.c` — vertical app-launch menu above Start button
 
 ### 10.6 — GUI Kernel Thread & Mode Switch
-- 🔄 Add a new kernel thread `gui_main` (initially implemented inside `kernel/gui/wm.c` via `gui_wm_start()`):
-  - ✅ Initialize framebuffer, font system, input abstraction, and window manager state.
-  - ✅ Enter a loop that: pulls events from the GUI event queue, dispatches them to the active window, and triggers full-screen redraws.
-- ⬜ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
-  - In the shell command handler, spawn `gui_main` as a kthread, hide or minimize the text-mode terminal, and hand over keyboard/mouse focus to the GUI.
-  - For now, allow returning to text mode only by rebooting; later, support VT-style switching.
+- 🔄 `gui_wm_start()` kthread in `kernel/gui/wm.c`
+  - ✅ Init framebuffer, font, input, WM state; event-loop redraw
+  - ⬜ Shell command `startx` spawns gui_main kthread, hands over focus
 
 ---
 
@@ -539,36 +429,19 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 > Goal: Provide a set of core, Windows-style applications to show off the GUI and make the OS usable.
 
 ### 11.1 — Notepad (Text Editor)
-- ⬜ Implement `kernel/apps/notepad.c` + `kernel/apps/notepad.h`:
-  - Window with multiline text area and a simple menu bar (File, Edit).
-  - Basic editing features: insert text, backspace/delete, new line on Enter, scroll when content exceeds window height.
-  - Integrate with VFS for basic file operations: `Open` (read text file into buffer), `Save` (write buffer back to file), `Save As` (hardcode paths initially, later show a file picker).
-  - Reuse existing line-editing logic from the shell where possible.
+- ⬜ `kernel/apps/notepad.c` + `.h` — multiline edit, File/Edit menu bar, VFS open/save
 
 ### 11.2 — File Explorer
-- ⬜ Implement `kernel/apps/explorer.c` + `kernel/apps/explorer.h`:
-  - Two-pane layout: left pane for directory tree (start with `/` and `/initrd`), right pane for file list.
-  - Use VFS APIs (`vfs_open`, `vfs_read`, `vfs_close`, future `vfs_listdir`) to enumerate and display files.
-  - Support basic actions on double-click: open text files in Notepad, show hex view for binaries, or later delegate to app associations.
-  - Show file name, size, and type icon in a table-like view.
+- ⬜ `kernel/apps/explorer.c` + `.h` — two-pane directory tree + file list, VFS enumeration
 
 ### 11.3 — Terminal Emulator (GUI)
-- ⬜ Implement `kernel/apps/terminal_gui.c` + `kernel/apps/terminal_gui.h`:
-  - Wrap the existing shell/terminal logic inside a GUI window.
-  - Render terminal text into a fixed-width font grid within the window client area.
-  - Forward keyboard events from the GUI window into the shell’s input ring buffer, and map mouse scroll to history navigation.
+- ⬜ `kernel/apps/terminal_gui.c` + `.h` — shell inside a GUI window, fixed-width font grid
 
 ### 11.4 — Settings Panel
-- ⬜ Implement `kernel/apps/settings.c` + `kernel/apps/settings.h`:
-  - Tabbed or list-based UI for basic configuration: theme (light/dark), colors, mouse speed, keyboard repeat rate, system info.
-  - Wire a few settings through to real kernel state (e.g., theme colors, mouse sensitivity), others can be placeholders for now.
+- ⬜ `kernel/apps/settings.c` + `.h` — tabbed config: theme, colors, mouse speed, system info
 
 ### 11.5 — AI Chat Window
-- ⬜ Implement `kernel/apps/ai_chat.c` + `kernel/apps/ai_chat.h`:
-  - GUI front-end for the LLM inference manager from Phase 7.
-  - Chat-style layout: scrollable message history, input box at the bottom, send button.
-  - Display user messages and AI responses in different colors/bubbles.
-  - Stream tokens from the inference thread into the window as they are generated.
+- ⬜ `kernel/apps/ai_chat.c` + `.h` — GUI front-end for Phase 7 inference manager; token streaming
 
 ---
 
@@ -590,52 +463,53 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 |-----------|-------|--------|
 | Build system | `build.sh`, `Makefile`, `boot/linker.ld` | ✅ Complete |
 | Dep checker | `scripts/check_deps.sh` | ✅ Complete |
-| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Complete — `module2 /boot/initrd.img` added |
-| GDT | `kernel/gdt.c` | ✅ Complete — TSS, far-jump CS reload, ltr |
-| IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete — 256 gates, exception dump, #DE test |
-| APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete — PIC dead, LAPIC+IOAPIC, EOI |
-| PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete — 1000 Hz, IRQ0→0x20, tick+sleep |
-| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete — putchar, color, scroll, hw cursor, set/get cursor, putchar_at |
-| Serial | `kernel/serial.c`, `kernel/serial.h` | ✅ Complete — COM1 115200 baud, klog macros |
-| Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + cli+hlt |
-| Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + 7-bit error decode → panic |
-| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, E0 arrows/home/end/del |
-| Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete — IRQ12, 3-byte PS/2, VGA cursor, ring buffer |
-| PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc |
-| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 64 MB identity map |
-| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, coalesce, canary, smoke-test |
-| PCI | `kernel/pci.c`, `kernel/pci.h` | ✅ Complete — bus scan, dump, busmaster DMA |
-| AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete — HBA init, port detect, DMA read+write, sector0 test |
-| FAT32 | `kernel/fat32.c`, `kernel/fat32.h` | ✅ Complete — BPB parse, cluster chain, LFN, find/read/write/create |
-| VFS | `kernel/fs/vfs.c`, `kernel/fs/vfs.h` | ✅ Complete — vfs_open/read/close wrapping FAT32 |
-| Initrd | `kernel/initrd.c`, `kernel/mb2_modules.c`, `kernel/fs/vfs_initrd.c` | ✅ Complete — ARDS format, MB2 module parse, VFS /initrd/ shim |
-| mkinitrd | `scripts/mkinitrd.py` | ✅ Complete — Python3 image builder |
-| Task system | `kernel/task.c`, `kernel/task.h` | ✅ Complete — pid, states, task_create, task_destroy |
-| Context switch | `kernel/switch_context.asm` | ✅ Complete — NASM callee-save swap |
-| Scheduler | `kernel/sched.c`, `kernel/sched.h` | ✅ Complete — round-robin, sched_tick, sleep, yield, exit, idle |
-| kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete — kthread_create, kthread_exit, kthread_join |
-| Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete — spinlock (xchg+irqsave), mutex (yield-spin+waiter list), semaphore (counting) |
-| Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
-| Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
-| ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 — framebuffer + banner + basic GUI window manager test wired |
-| CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
-| Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
-| LLM math ops | `kernel/llm/ops.c`, `kernel/llm/ops.h` | ✅ Complete — matmul/add/scale/softmax/layer norm/GELU/embedding/RoPE |
-| Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete — MB2 framebuffer tag parse + 32-bit ARGB primitives |
-| Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete — builtin 8×16 debug font + basic string/label drawing |
-| GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete — GUI event queue + mouse state + double-click detection APIs |
-| GUI window core | `kernel/gui/window.c`, `kernel/gui/window.h` | ✅ Complete — minimal window struct + doubly-linked z-order list + creation/destruction APIs |
-| GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | 🔄 In progress — basic redraw loop + single test window + mouse-down activation; no dragging/resizing yet |
-| LLM engine | `kernel/llm/tensor.c`, `kernel/llm/ops.c` | 🔄 In progress — tensor core + Phase 7.2 CPU math ops complete |
+| GRUB boot | `boot/grub.cfg`, `boot/kernel_entry.asm` | ✅ Complete |
+| GDT | `kernel/gdt.c` | ✅ Complete |
+| IDT + ISR | `kernel/idt.c`, `kernel/isr_stubs.asm` | ✅ Complete |
+| APIC | `kernel/apic.c`, `kernel/apic.h` | ✅ Complete |
+| PIT | `kernel/pit.c`, `kernel/include/pit.h` | ✅ Complete |
+| VGA | `kernel/vga.c`, `kernel/include/vga.h` | ✅ Complete |
+| Serial | `kernel/serial.c`, `kernel/serial.h` | ✅ Complete |
+| Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete |
+| Page fault | `kernel/pf_handler.c` | ✅ Complete |
+| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete |
+| Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete |
+| PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete |
+| VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete |
+| Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete |
+| PCI | `kernel/pci.c`, `kernel/pci.h` | ✅ Complete |
+| AHCI | `kernel/ahci.c`, `kernel/ahci.h` | ✅ Complete |
+| FAT32 | `kernel/fat32.c`, `kernel/fat32.h` | ✅ Complete |
+| VFS | `kernel/fs/vfs.c`, `kernel/fs/vfs.h` | ✅ Complete |
+| Initrd | `kernel/initrd.c`, `kernel/mb2_modules.c`, `kernel/fs/vfs_initrd.c` | ✅ Complete |
+| mkinitrd | `scripts/mkinitrd.py` | ✅ Complete |
+| Task system | `kernel/task.c`, `kernel/task.h` | ✅ Complete |
+| Context switch | `kernel/switch_context.asm` | ✅ Complete |
+| Scheduler | `kernel/sched.c`, `kernel/sched.h` | ✅ Complete |
+| kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete |
+| Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete |
+| Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete |
+| Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete |
+| ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 wired |
+| CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete |
+| Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete |
+| LLM math ops | `kernel/llm/ops.c`, `kernel/llm/ops.h` | ✅ Complete |
+| **Attention + KV-Cache** | `kernel/llm/attention.c`, `kernel/llm/attention.h` | ✅ **Complete — Phase 7.3** |
+| **Transformer block** | `kernel/llm/transformer.c`, `kernel/llm/transformer.h` | ✅ **Complete — Phase 7.4** |
+| Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete |
+| Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete |
+| GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete |
+| GUI window core | `kernel/gui/window.c`, `kernel/gui/window.h` | ✅ Complete |
+| GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | 🔄 In progress — no drag/resize yet |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + basic WM test (Phase 10.1–10.4); desktop/taskbar/start menu + apps not started |
+| GUI desktop/taskbar | — | ⬜ Not started (Phase 10.5) |
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 7.3 — Attention mechanism** ← **NEXT** — `kernel/llm/attention.c`, multi-head attention, causal masking, softmax, output projection, and KV-cache scaffolding.
-2. **Phase 10.5 — Desktop + taskbar (optional parallel track)** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c` / `.h` to move the top banner into desktop code and add a Windows-like taskbar and Start button.
+1. **Phase 7.5 — Full model forward pass** ← **NEXT** — `kernel/llm/model.c` + `kernel/llm/model.h`: model config struct, `model_forward()`, greedy/temperature/top-k/top-p sampling.
+2. **Phase 10.5 — Desktop + taskbar (parallel track)** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c`.
 
 ---
 
@@ -674,57 +548,39 @@ AIOS/
 │   │   └── config.bin       ← gpt2, vocab=50257, seq=1024
 │   └── fonts/               ← ⬜ TODO Phase 10.2 (bitmap font assets)
 ├── boot/
-│   ├── grub.cfg             ← module2 /boot/initrd.img added
+│   ├── grub.cfg
 │   ├── kernel_entry.asm
 │   └── linker.ld
 ├── kernel/
-│   ├── kernel_main.c        ← Phase 10.4 — framebuffer + banner + basic GUI window manager test wired
-│   ├── gdt.c                ← ✅
-│   ├── idt.c                ← ✅
-│   ├── isr_stubs.asm        ← ✅
-│   ├── apic.c / .h          ← ✅
-│   ├── pit.c / .h           ← ✅
-│   ├── vga.c / vga.h        ← ✅ + Phase 5.1 additions
-│   ├── vga_phase51.c        ← ✅ merge into vga.c
-│   ├── serial.c / .h        ← ✅
-│   ├── panic.c              ← ✅
-│   ├── pf_handler.c         ← ✅
-│   ├── keyboard.c           ← ✅ + E0 extended-key patch
-│   ├── mouse.c              ← ✅
-│   ├── pmm.c / .h           ← ✅
-│   ├── vmm.c / .h           ← ✅
-│   ├── heap.c / .h          ← ✅
-│   ├── pci.c / .h           ← ✅
-│   ├── ahci.c / .h          ← ✅
-│   ├── fat32.c / .h         ← ✅
-│   ├── initrd.c / .h        ← ✅ Phase 3.4
-│   ├── mb2_modules.c / .h   ← ✅ Phase 3.4
-│   ├── task.c / .h          ← ✅
-│   ├── switch_context.asm   ← ✅
-│   ├── sched.c / .h         ← ✅
-│   ├── kthread.c / .h       ← ✅ Phase 4.3
-│   ├── sync.c / .h          ← ✅ Phase 4.4
-│   ├── simd.c / .h          ← ✅ Phase 6.4
+│   ├── kernel_main.c        ← Phase 10.4 wired
+│   ├── gdt.c / idt.c / isr_stubs.asm
+│   ├── apic.c / .h / pit.c / .h / vga.c / .h
+│   ├── serial.c / .h / panic.c / pf_handler.c
+│   ├── keyboard.c / mouse.c
+│   ├── pmm.c / .h / vmm.c / .h / heap.c / .h
+│   ├── pci.c / .h / ahci.c / .h / fat32.c / .h
+│   ├── initrd.c / .h / mb2_modules.c / .h
+│   ├── task.c / .h / switch_context.asm
+│   ├── sched.c / .h / kthread.c / .h / sync.c / .h
+│   ├── simd.c / .h
+│   ├── acpi.c / .h
 │   ├── include/
 │   ├── fs/
-│   │   ├── vfs.c / .h       ← ✅
-│   │   └── vfs_initrd.c / .h← ✅ Phase 3.4
+│   │   ├── vfs.c / .h
+│   │   └── vfs_initrd.c / .h
 │   ├── shell/
-│   │   ├── terminal.c / .h  ← ✅ Phase 5.1
-│   │   ├── shell.c / .h     ← ✅ Phase 5.2
-│   │   ├── terminal_kernel_main_patch.md
-│   │   └── shell_kernel_main_patch.md
-│   ├── acpi.c / .h          ← ✅ Phase 5.3
+│   │   ├── terminal.c / .h  ← ✅
+│   │   └── shell.c / .h     ← ✅
 │   ├── gpu/
 │   │   └── amdgpu.c / .h    ← ⬜ TODO Phase 6.3
 │   ├── gfx/
-│   │   ├── framebuffer.c / .h ← ✅ Phase 10.1
-│   │   ├── font.c / .h         ← ✅ Phase 10.2
-│   │   └── colors.h            ← ✅ Phase 10.1 (UI colors)
+│   │   ├── framebuffer.c / .h  ← ✅
+│   │   ├── font.c / .h         ← ✅
+│   │   └── colors.h            ← ✅
 │   ├── gui/
-│   │   ├── input.c / .h        ← ✅ Phase 10.3
-│   │   ├── window.c / .h       ← ✅ Phase 10.4
-│   │   ├── wm.c / wm.h         ← 🔄 Phase 10.4/10.6
+│   │   ├── input.c / .h        ← ✅
+│   │   ├── window.c / .h       ← ✅
+│   │   ├── wm.c / wm.h         ← 🔄
 │   │   ├── desktop.c           ← ⬜ TODO Phase 10.5
 │   │   ├── taskbar.c / .h      ← ⬜ TODO Phase 10.5
 │   │   └── start_menu.c        ← ⬜ TODO Phase 10.5
@@ -737,9 +593,9 @@ AIOS/
 │   └── llm/
 │       ├── tensor.c / .h       ← ✅ Phase 7.1
 │       ├── ops.c / .h          ← ✅ Phase 7.2
-│       ├── attention.c         ← ⬜ TODO Phase 7.3 NEXT
-│       ├── transformer.c       ← ⬜ TODO Phase 7.4
-│       ├── model.c / .h        ← ⬜ TODO Phase 7.5
+│       ├── attention.c / .h    ← ✅ Phase 7.3
+│       ├── transformer.c / .h  ← ✅ Phase 7.4
+│       ├── model.c / .h        ← ⬜ TODO Phase 7.5 NEXT
 │       ├── loader.c / .h       ← ⬜ TODO Phase 7.6
 │       ├── tokenizer.c / .h    ← ⬜ TODO Phase 7.7
 │       ├── quant.c             ← ⬜ TODO Phase 7.8
@@ -749,4 +605,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 7.2 (Math ops) implemented: `kernel/llm/ops.c` + `kernel/llm/ops.h` with matmul, add, scale, softmax, layer norm, GELU, embedding lookup, and RoPE backed by SIMD where safe. Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 7.3 (attention mechanism + KV-cache) and Phase 10.5 (desktop, taskbar, and Start menu).
+*Last updated: May 2026 — Phase 7.3 (Attention + KV-Cache) complete: `kernel/llm/attention.c` + `.h` with `attn_config_t`, `kv_cache_t`, `kvcache_alloc/free/reset`, `attn_forward` (single-token causal MHA with RoPE, GQA/MQA support), `attn_forward_full` (prefill wrapper). Phase 7.4 (Transformer block) complete: `kernel/llm/transformer.c` + `.h` with GPT-2 post-norm and LLaMA pre-norm/RMSNorm styles, SwiGLU MLP variant, `transformer_block_forward` single-token step, zero heap leak guarantee. Next: Phase 7.5 — full model forward pass + sampling (`kernel/llm/model.c`).*
