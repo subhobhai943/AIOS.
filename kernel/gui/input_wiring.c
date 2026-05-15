@@ -1,112 +1,155 @@
-/* kernel/gui/input_wiring.c
- * Phase 10.3 — Wire existing PS/2 mouse and keyboard drivers to the
- * GUI input abstraction so the window manager event queue is populated
- * when GUI mode is active.
+/* kernel/gui/input_wiring.c — Phase 10.3
  *
- * How it works
- * ------------
- * The mouse IRQ handler (mouse_handle_irq) and keyboard ISR both fire
- * with every device packet.  When GUI mode is active we additionally
- * call gui_input_push_mouse_delta() / gui_input_push_key_down() from
- * within those paths.
+ * Activate GUI input mode: redirect mouse and keyboard callbacks
+ * from the VGA/terminal subsystem to the GUI event queue
+ * (gui_input.c).
  *
- * Rather than patching the ISR source files (mouse.c / keyboard.c)
- * directly, we provide two thin wrapper functions that the kernel_main
- * hooks into the existing interrupt paths via function pointers, keeping
- * the drivers pristine.
+ * Call gui_wiring_activate() exactly once, from the startx command
+ * (shell.c Phase 10.6).  After this call:
+ *   - Every PS/2 mouse IRQ12 event pushes a gui_event_t via
+ *     gui_input_push_mouse().
+ *   - Every PS/2 keyboard IRQ1 event pushes a gui_event_t via
+ *     gui_input_push_key().
+ *   - The VGA terminal stops consuming keyboard events.
  *
- * Usage in kernel_main.c
- * -----------------------
- *   #include "gui/input_wiring.h"
- *   gui_input_wiring_install();   // call after mouse_init() + kbd_init()
+ * This is a clean activation fence — there is no deactivate path
+ * (switching back to text mode is a future TTY-switch feature).
  *
- * After this call, every mouse movement / button event and every
- * key-press / key-release is automatically mirrored into the GUI queue.
+ * Constraints:
+ *   - Freestanding C, -ffreestanding -nostdlib -mno-red-zone
+ *   - Only <stdint.h>, <stddef.h>, <stdbool.h>
+ *   - Heap: kmalloc/kfree (not needed here — static activation flag)
  */
 
-#include "gui/input_wiring.h"
-#include "gui/input.h"
-#include "include/mouse.h"
-#include "include/keyboard.h"
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 
-/* ------------------------------------------------------------------ */
-/* Global "GUI mode active" flag                                       */
-/* ------------------------------------------------------------------ */
+#include "input_wiring.h"
+#include "input.h"
 
-static volatile bool g_gui_mode = false;
+#include "../serial.h"
+#include "../keyboard.h"
+#include "../mouse.h"
 
-void gui_input_wiring_set_active(bool active)
-{
-    g_gui_mode = active;
-}
+/* ── activation guard ───────────────────────────────────────── */
+static bool g_gui_wiring_active = false;
 
-bool gui_input_wiring_is_active(void)
-{
-    return g_gui_mode;
-}
-
-/* ------------------------------------------------------------------ */
-/* Mouse wiring                                                        */
-/* ------------------------------------------------------------------ */
-
+/* ── GUI keyboard callback ──────────────────────────────────── */
 /*
- * Call this from the mouse IRQ12 handler AFTER updating mouse_x/mouse_y
- * and pushing the low-level event into the PS/2 ring buffer.
+ * Called by keyboard.c IRQ1 handler in place of the terminal feed.
+ * Translates a raw key_event_t into a gui_event_t and enqueues it.
  *
- * Parameters mirror the already-decoded delta values and button flags
- * that mouse_handle_irq() already computes.
+ * key_event_t fields (from keyboard.h):
+ *   uint8_t  scancode    — PS/2 Set-1 scancode
+ *   uint8_t  ascii       — ASCII character (0 if non-printable)
+ *   bool     pressed     — true = keydown, false = keyup
+ *   uint8_t  modifiers   — KBD_MOD_SHIFT | KBD_MOD_CTRL | KBD_MOD_CAPS
  */
-void gui_input_wiring_on_mouse(int dx, int dy, uint8_t ps2_buttons)
+static void gui_kbd_callback(const key_event_t *ke)
 {
-    if (!g_gui_mode) return;
+    if (!ke) return;
 
-    /* Map PS/2 button bitmask to GUI bitmask:
-     *  PS/2 bit0 = Left, bit1 = Right, bit2 = Middle
-     *  GUI uses the same bit positions — direct copy is fine.
+    gui_event_t ev;
+    ev.type     = ke->pressed ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
+    ev.key      = ke->scancode;
+    ev.ascii    = ke->ascii;
+    ev.mods     = ke->modifiers;
+    ev.x        = 0;
+    ev.y        = 0;
+    ev.buttons  = 0;
+
+    gui_input_push_key(&ev);
+}
+
+/* ── GUI mouse callback ─────────────────────────────────────── */
+/*
+ * Called by mouse.c IRQ12 handler in place of the VGA cursor draw.
+ * Translates a mouse_event_t into one or two gui_event_t messages
+ * (MOUSE_MOVE and/or MOUSE_DOWN / MOUSE_UP).
+ *
+ * mouse_event_t fields (from mouse.h):
+ *   int32_t  dx, dy      — delta X / delta Y (signed, packet-decoded)
+ *   int32_t  abs_x, abs_y — absolute clamped position
+ *   uint8_t  buttons     — bit0=left, bit1=right, bit2=middle
+ *   uint8_t  prev_buttons — buttons state before this packet
+ */
+static void gui_mouse_callback(const mouse_event_t *me)
+{
+    if (!me) return;
+
+    /* --- Movement event --- */
+    if (me->dx != 0 || me->dy != 0) {
+        gui_event_t ev;
+        ev.type    = GUI_EVENT_MOUSE_MOVE;
+        ev.x       = me->abs_x;
+        ev.y       = me->abs_y;
+        ev.buttons = me->buttons;
+        ev.key     = 0;
+        ev.ascii   = 0;
+        ev.mods    = 0;
+        gui_input_push_mouse(&ev);
+    }
+
+    /* --- Button change events --- */
+    uint8_t changed = me->buttons ^ me->prev_buttons;
+    if (changed) {
+        /* Check each of the 3 buttons */
+        static const uint8_t btn_masks[3] = {
+            GUI_MOUSE_BUTTON_LEFT,
+            GUI_MOUSE_BUTTON_RIGHT,
+            GUI_MOUSE_BUTTON_MIDDLE
+        };
+        for (int i = 0; i < 3; i++) {
+            if (!(changed & btn_masks[i])) continue;
+
+            gui_event_t ev;
+            ev.type    = (me->buttons & btn_masks[i])
+                         ? GUI_EVENT_MOUSE_DOWN
+                         : GUI_EVENT_MOUSE_UP;
+            ev.x       = me->abs_x;
+            ev.y       = me->abs_y;
+            ev.buttons = btn_masks[i];  /* which button caused this event */
+            ev.key     = 0;
+            ev.ascii   = 0;
+            ev.mods    = 0;
+            gui_input_push_mouse(&ev);
+        }
+    }
+}
+
+/* ── gui_wiring_activate ─────────────────────────────────────── */
+void gui_wiring_activate(void)
+{
+    if (g_gui_wiring_active) {
+        klog("[input_wiring] already active — ignoring duplicate call\n");
+        return;
+    }
+
+    klog("[input_wiring] activating GUI keyboard callback\n");
+
+    /*
+     * keyboard_set_gui_callback(fn):
+     *   Registered in keyboard.c.  When set to non-NULL, the IRQ1
+     *   handler calls fn(ke) instead of (in addition to) the default
+     *   terminal_feed() path.  Setting it here redirects all key
+     *   events to the GUI queue.
+     *
+     * mouse_set_gui_callback(fn):
+     *   Registered in mouse.c.  When set to non-NULL, the IRQ12
+     *   handler calls fn(me) instead of moving the VGA text cursor.
      */
-    uint8_t gui_buttons = ps2_buttons & 0x07u;
-    gui_input_push_mouse_delta(dx, dy, gui_buttons);
+    keyboard_set_gui_callback(gui_kbd_callback);
+
+    klog("[input_wiring] activating GUI mouse callback\n");
+    mouse_set_gui_callback(gui_mouse_callback);
+
+    g_gui_wiring_active = true;
+    klog("[input_wiring] GUI input wiring ACTIVE\n");
 }
 
-/* ------------------------------------------------------------------ */
-/* Keyboard wiring                                                     */
-/* ------------------------------------------------------------------ */
-
-/*
- * Call this from the keyboard ISR once an ASCII / keycode has been
- * decoded.  `is_press` is true for key-down, false for key-up.
- * `ascii` is the decoded character (or 0 for non-printable).
- * `mods` is a bitmask of GUI_MOD_SHIFT | GUI_MOD_CTRL | GUI_MOD_ALT.
- */
-void gui_input_wiring_on_key(uint8_t ascii, uint8_t mods, bool is_press)
+/* ── gui_wiring_is_active ────────────────────────────────────── */
+bool gui_wiring_is_active(void)
 {
-    if (!g_gui_mode) return;
-
-    if (is_press)
-        gui_input_push_key_down(ascii, mods);
-    else
-        gui_input_push_key_up(ascii, mods);
-}
-
-/* ------------------------------------------------------------------ */
-/* Install hooks                                                        */
-/* ------------------------------------------------------------------ */
-
-/*
- * Sets the global function pointers g_mouse_gui_hook and g_kbd_gui_hook
- * that mouse.c / keyboard.c check at the end of their IRQ handlers.
- *
- * This avoids any libc dependency; function pointers are just global
- * variables in BSS, which are zero-initialised, so no hook fires until
- * explicitly installed here.
- */
-extern void (*g_mouse_gui_hook)(int dx, int dy, uint8_t buttons);
-extern void (*g_kbd_gui_hook)(uint8_t ascii, uint8_t mods, bool is_press);
-
-void gui_input_wiring_install(void)
-{
-    g_mouse_gui_hook = gui_input_wiring_on_mouse;
-    g_kbd_gui_hook   = gui_input_wiring_on_key;
+    return g_gui_wiring_active;
 }
