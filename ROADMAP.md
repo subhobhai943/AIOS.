@@ -336,6 +336,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - ✅ `chat` — interactive multi-turn loop (type `exit` to return); inference stub (Phase 7.9)
   - ✅ `reboot` — PS/2 controller reset pulse; triple-fault fallback; ACPI path at Phase 5.3
   - ✅ `shutdown` — QEMU ACPI port 0x604/0xB004/0x600; ACPI FADT path at Phase 5.3
+  - ✅ `startx` / `gui` — start the graphical desktop (Phase 10.6)
 - ✅ `shell_run(void *arg)` kthread entry — launched via `kthread_create(shell_run, NULL, 65536, "shell")`
 - ✅ Wiring + API additions documented in `kernel/shell/shell_kernel_main_patch.md`
 
@@ -497,7 +498,9 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - ✅ Convert raw mouse/keyboard data into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP` via a single ring buffer of `gui_event_t`.
   - ✅ Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1) with clamping logic in `gui_input_update_mouse_pos_locked`.
   - ✅ Support left/right (and middle) button tracking and naive double-click detection (timestamp + small position delta) flagged via `GUI_MOUSE_FLAG_DOUBLE_CLICK` on `GUI_EVENT_MOUSE_DOWN`.
-- 🔄 Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active (callbacks and `gui_input_from_*` bridge exist; ISR integration pending).
+- 🔄 Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active:
+  - ✅ Callback hooks and bridge helpers added: `mouse_set_gui_callback()`, `keyboard_set_gui_callback()`, `gui_input_from_mouse_event()`, `gui_input_from_key_event()`, and `gui_input_enable()/disable()` in `kernel/gui/input_mode.c`.
+  - ⬜ Finalise ISR integration in `mouse.c` / `keyboard.c` to call these callbacks instead of the legacy VGA/terminal paths when GUI mode is enabled.
 
 ### 10.4 — Window Manager Core
 - ✅ Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
@@ -526,12 +529,12 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - On menu item click, launch a stub window for the corresponding app using `gui_create_window`.
 
 ### 10.6 — GUI Kernel Thread & Mode Switch
-- 🔄 Add a new kernel thread `gui_main` (initially implemented inside `kernel/gui/wm.c` via `gui_wm_start()`):
+- ✅ Add a new kernel thread `gui_main` (implemented inside `kernel/gui/wm.c` via `gui_wm_start()`):
   - ✅ Initialize framebuffer, font system, input abstraction, desktop, taskbar, start menu, and window manager state.
   - ✅ Enter a loop that: pulls events from the GUI event queue, dispatches them to the active window (and taskbar/start menu as needed), and triggers full-screen redraws.
-- ⬜ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
-  - In the shell command handler, spawn `gui_main` as a kthread, hide or minimize the text-mode terminal, and hand over keyboard/mouse focus to the GUI.
-  - For now, allow returning to text mode only by rebooting; later, support VT-style switching.
+- ✅ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
+  - ✅ In the shell command handler (Phase 5.2 shell), call `gui_input_enable()` and `gui_wm_start()` to route input to the GUI and spawn the WM thread.
+  - ⬜ For now, returning to pure text mode is only possible by rebooting; VT-style switching is a future enhancement.
 
 ---
 
@@ -617,7 +620,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | kthread API | `kernel/kthread.c`, `kernel/kthread.h` | ✅ Complete — kthread_create, kthread_exit, kthread_join |
 | Sync primitives | `kernel/sync.c`, `kernel/sync.h` | ✅ Complete — spinlock (xchg+irqsave), mutex (yield-spin+waiter list), semaphore (counting) |
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
-| Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
+| Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 + startx/gui GUI launcher (Phase 10.6) |
 | ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
 | Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 — framebuffer + banner + basic GUI window manager + WM thread wired |
 | CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
@@ -630,12 +633,12 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + WM + desktop + taskbar + start menu (Phase 10.1–10.6); GUI apps not started |
+| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + WM + desktop + taskbar + start menu + shell startx/gui launcher (Phase 10.1–10.6); GUI apps not started |
 
 ### Immediate Next Steps (pick up here)
 
 1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-2. **Phase 10.3/10.6 — GUI input wiring + shell integration (optional parallel track)** — finalise `mouse.c` / `keyboard.c` ISR integration with `gui_input_from_*` bridge and add a `startx`/`gui` shell command to enter GUI mode.
+2. **Phase 10.3 — Final GUI input ISR wiring (optional short follow-up)** — patch `mouse.c` / `keyboard.c` IRQ paths to call the GUI callbacks when `gui_input_enable()` is active (replacing the legacy VGA cursor / terminal paths).
 
 ---
 
@@ -646,7 +649,7 @@ When continuing work with an AI assistant, paste this at the start of your sessi
 ```
 We are building AIOS — an operating system from scratch with an integrated local LLM, also from scratch.
 Codebase:  https://github.com/subhobhai943/AIOS..git
-Language: C (freestanding, no libc), NASM assembly.
+Language: C (freestanding, no libc), NASM Assembly.
 Check ROADMAP.md for current progress. Continue from the first unchecked ⬜ item in the current phase.
 Do not use any standard library headers except <stdint.h>, <stddef.h>, <stdbool.h>.
 All memory allocation goes through kmalloc/kfree (once heap is ready) or static buffers before that.
@@ -712,7 +715,7 @@ AIOS/
 │   │   └── vfs_initrd.c / .h← ✅ Phase 3.4
 │   ├── shell/
 │   │   ├── terminal.c / .h  ← ✅ Phase 5.1
-│   │   ├── shell.c / .h     ← ✅ Phase 5.2
+│   │   ├── shell.c / .h     ← ✅ Phase 5.2 + Phase 10.6 GUI launcher
 │   │   ├── terminal_kernel_main_patch.md
 │   │   └── shell_kernel_main_patch.md
 │   ├── acpi.c / .h          ← ✅ Phase 5.3
@@ -725,6 +728,8 @@ AIOS/
 │   ├── gui/
 │   │   ├── input.c / .h        ← ✅ Phase 10.3
 │   │   ├── input_bridge.c      ← 🔄 Phase 10.3 (mouse/keyboard → GUI event bridge)
+│   │   ├── input_bridge.h      ← 🔄 Phase 10.3
+│   │   ├── input_mode.c / .h   ← 🔄 Phase 10.3 (gui_input_enable/disable)
 │   │   ├── window.c / .h       ← ✅ Phase 10.4
 │   │   ├── wm.c / wm.h         ← ✅ Phase 10.4/10.6
 │   │   ├── desktop.c           ← ✅ Phase 10.5
@@ -751,4 +756,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.6 GUI groundwork extended: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), GUI window core (`kernel/gui/window.c` + `kernel/gui/wm.c`), desktop background (`kernel/gui/desktop.c`), taskbar + Start button + uptime clock (`kernel/gui/taskbar.c` + `.h`), start menu with stub app launchers (`kernel/gui/start_menu.c`), and a running WM thread with mouse dragging/resizing. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.3/10.6 (GUI input wiring from ISR paths + `startx` shell command).
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.6 GUI groundwork extended: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), GUI window core (`kernel/gui/window.c` + `kernel/gui/wm.c`), desktop background (`kernel/gui/desktop.c`), taskbar + Start button + uptime clock (`kernel/gui/taskbar.c` + `.h`), start menu with stub app launchers (`kernel/gui/start_menu.c`), GUI input mode helpers (`kernel/gui/input_bridge.c` + `.h`, `kernel/gui/input_mode.c` + `.h`), a running WM thread with mouse dragging/resizing, and `startx`/`gui` shell commands to launch the desktop. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and a short follow-up for Phase 10.3 (patching mouse/keyboard ISR paths to call GUI callbacks when GUI mode is enabled).
