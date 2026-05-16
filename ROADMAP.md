@@ -95,7 +95,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ Color support: `vga_set_color(fg, bg)` + `vga_puts_color()`
 - ✅ Hardware cursor updated on every `vga_putchar()` call
 - ✅ **Phase 5.1:** `vga_set_cursor(col,row)`, `vga_get_cursor(col,row)`, `vga_putchar_at(c,fg,bg,col,row)` added (`kernel/vga_phase51.c`)
-- ⬜ **TODO — Framebuffer (VESA/GOP):** Switch to linear framebuffer mode for pixel graphics (needed for GUI Phase 10). Parse multiboot framebuffer info tag. Implement `fb_put_pixel(x, y, color)`.
+- ✅ **Framebuffer (VESA/GOP):** Switched to linear framebuffer mode for pixel graphics via `kernel/gfx/framebuffer.c` / `fb_init_from_multiboot()` (used by GUI Phase 10).
 
 ### 1.5 — Serial Port (Debug Output)
 - ✅ `kernel/serial.c` — serial driver exists
@@ -168,7 +168,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `kmalloc(size)` → 16-byte aligned; first-fit with block splitting
 - ✅ `kfree(ptr)` → marks block free; full-pass forward coalesce
 - ✅ `krealloc(ptr, new_size)` → in-place if fits, else copy + free
-- ✅ `kcalloc(count, elem_size)` → kmalloc + zero-fill
+- ✅ `kcalloc(count, elem_size)` — kmalloc + zero-fill
 - ✅ `kmalloc_aligned(size, align)` / `kfree_aligned(ptr)`
 - ✅ Magic canary (`0xA110C8ED`) on every block header — corruption detected on free
 - ✅ Double-free guard in `kfree()`
@@ -497,37 +497,38 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - ✅ Convert raw mouse/keyboard data into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP` via a single ring buffer of `gui_event_t`.
   - ✅ Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1) with clamping logic in `gui_input_update_mouse_pos_locked`.
   - ✅ Support left/right (and middle) button tracking and naive double-click detection (timestamp + small position delta) flagged via `GUI_MOUSE_FLAG_DOUBLE_CLICK` on `GUI_EVENT_MOUSE_DOWN`.
-- ⬜ Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active.
+- 🔄 Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active (callbacks and `gui_input_from_*` bridge exist; ISR integration pending).
 
 ### 10.4 — Window Manager Core
-- 🔄 Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
+- ✅ Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
   - ✅ `gui_window_t` struct: `id`, `title`, `x`, `y`, `width`, `height`, `state` (normal/moving/resizing/minimized/hidden), `is_active`, `draw_callback`, `event_callback`, user data pointer.
-  - ✅ `gui_create_window(x, y, w, h, const char* title, draw_callback, event_callback, void* user_data)` — registers a new window (kmalloc’d) and inserts it at the front of a doubly-linked z-ordered list.
+  - ✅ `gui_create_window(x, y, w, h, const char* title, draw_callback, event_callback, void* user_data)` — registers a new window (kmalloc’d) and inserts it at the front of a doubly-ordered z-ordered list.
   - ✅ `gui_destroy_window(win)` — removes a window from internal lists and frees it.
-- 🔄 Render loop in `kernel/gui/wm.c`:
+- ✅ Render loop in `kernel/gui/wm.c`:
   - ✅ Maintain a z-ordered list of windows; top-most window is active.
-  - ✅ For each frame: clear desktop background, draw a top banner, then draw all windows from back to front.
+  - ✅ For each frame: clear desktop background, draw windows (with frames and title bars) from back to front, then taskbar, start menu (if open), and mouse cursor.
   - ✅ For each window: draw a simple frame (title bar, border, body background) and invoke `draw_callback` to render the client area.
-- 🔄 Hit-testing and interaction:
+- ✅ Hit-testing and interaction:
   - ✅ On mouse-down, hit-test windows from top to bottom (current simple linear search) and bring the first hit to front, marking it active.
-  - ⬜ Add proper title-bar region detection and dragging/resizing state transitions.
+  - ✅ Title-bar region detection and bottom-right resize grip with dragging/resizing state transitions.
 
 ### 10.5 — Desktop, Taskbar & Start Menu
-- ⬜ Implement `kernel/gui/desktop.c`:
-  - Draw a solid background color or simple gradient.
-  - Optional: support a static AIOS logo bitmap at the center or corner using `fb_blit`.
-- ⬜ Implement `kernel/gui/taskbar.c` + `kernel/gui/taskbar.h`:
-  - Reserve a bottom-of-screen strip (e.g., 32–40 px height) for the taskbar.
-  - Left side: draw a "Start" button styled after classic Windows (text label or icon) that can be clicked.
-  - Middle/right: draw rectangular buttons for each open window (window title truncated), highlighting the active window.
-- ⬜ Implement a simple start menu in `kernel/gui/start_menu.c`:
-  - When the Start button is clicked, open a vertical menu above it with entries for basic apps (File Explorer, Notepad, Terminal, Settings, AI Chat).
-  - On menu item click, launch or focus the corresponding app window.
+- ✅ Implement `kernel/gui/desktop.c`:
+  - Draw a solid desktop background color with a simple accent gradient band at the top.
+  - Render a centred "AIOS" watermark text above the taskbar area.
+- ✅ Implement `kernel/gui/taskbar.c` + `kernel/gui/taskbar.h`:
+  - Reserve a bottom-of-screen strip (40 px height) for the taskbar.
+  - Left side: draw a "Start" button styled after classic Windows (text label) that can be clicked.
+  - Middle: draw rectangular buttons for each open (non-hidden) window (window title truncated), highlighting the active window.
+  - Right side: draw a simple uptime clock based on PIT tick count.
+- ✅ Implement a simple start menu in `kernel/gui/start_menu.c`:
+  - When the Start button is clicked, open a vertical menu above it with entries for basic apps (Terminal, Notepad, File Explorer, Settings, AI Chat, About).
+  - On menu item click, launch a stub window for the corresponding app using `gui_create_window`.
 
 ### 10.6 — GUI Kernel Thread & Mode Switch
 - 🔄 Add a new kernel thread `gui_main` (initially implemented inside `kernel/gui/wm.c` via `gui_wm_start()`):
-  - ✅ Initialize framebuffer, font system, input abstraction, and window manager state.
-  - ✅ Enter a loop that: pulls events from the GUI event queue, dispatches them to the active window, and triggers full-screen redraws.
+  - ✅ Initialize framebuffer, font system, input abstraction, desktop, taskbar, start menu, and window manager state.
+  - ✅ Enter a loop that: pulls events from the GUI event queue, dispatches them to the active window (and taskbar/start menu as needed), and triggers full-screen redraws.
 - ⬜ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
   - In the shell command handler, spawn `gui_main` as a kthread, hide or minimize the text-mode terminal, and hand over keyboard/mouse focus to the GUI.
   - For now, allow returning to text mode only by rebooting; later, support VT-style switching.
@@ -599,8 +600,8 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Serial | `kernel/serial.c`, `kernel/serial.h` | ✅ Complete — COM1 115200 baud, klog macros |
 | Panic | `kernel/panic.c`, `kernel/include/panic.h` | ✅ Complete — VGA red + serial + cli+hlt |
 | Page fault | `kernel/pf_handler.c` | ✅ Complete — CR2 + 7-bit error decode → panic |
-| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, E0 arrows/home/end/del |
-| Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete — IRQ12, 3-byte PS/2, VGA cursor, ring buffer |
+| Keyboard | `kernel/keyboard.c`, `kernel/include/keyboard.h` | ✅ Complete — IRQ1, scan→ASCII, ring buffer, E0 arrows/home/end/del; GUI callback hook declared |
+| Mouse | `kernel/mouse.c`, `kernel/include/mouse.h` | ✅ Complete — IRQ12, 3-byte PS/2, VGA cursor, ring buffer, GUI callback hook stub |
 | PMM | `kernel/pmm.c`, `kernel/pmm.h` | ✅ Complete — MB2 mmap, bitmap alloc |
 | VMM | `kernel/vmm.c`, `kernel/vmm.h` | ✅ Complete — 64 MB identity map |
 | Heap | `kernel/heap.c`, `kernel/heap.h` | ✅ Complete — free-list, coalesce, canary, smoke-test |
@@ -618,23 +619,23 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | Terminal | `kernel/shell/terminal.c`, `kernel/shell/terminal.h` | ✅ Complete — SPSC ring, readline, line editor, history×32, ANSI emitter |
 | Shell | `kernel/shell/shell.c`, `kernel/shell/shell.h` | ✅ Complete — Phase 5.2 |
 | ACPI | `kernel/acpi.c`, `kernel/acpi.h` | ✅ Complete — RSDP scan, RSDT/XSDT, FADT, _S5_, reset register, shutdown/reboot |
-| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 — framebuffer + banner + basic GUI window manager test wired |
+| Kernel main | `kernel/kernel_main.c` | ✅ Phase 10.4 — framebuffer + banner + basic GUI window manager + WM thread wired |
 | CPU SIMD | `kernel/simd.c`, `kernel/simd.h` | ✅ Complete — CPUID feature detect, AVX2 matmul/add/softmax/gelu, 32-byte aligned alloc |
 | Tensor library | `kernel/llm/tensor.c`, `kernel/llm/tensor.h` | ✅ Complete — minimal tensor abstraction (alloc/free/reshape/slice/print) |
 | Framebuffer core | `kernel/gfx/framebuffer.c`, `kernel/gfx/framebuffer.h`, `kernel/gfx/colors.h` | ✅ Complete — MB2 framebuffer tag parse + 32-bit ARGB primitives |
 | Font rendering | `kernel/gfx/font.c`, `kernel/gfx/font.h` | ✅ Complete — builtin 8×16 debug font + basic string/label drawing |
 | GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete — GUI event queue + mouse state + double-click detection APIs |
 | GUI window core | `kernel/gui/window.c`, `kernel/gui/window.h` | ✅ Complete — minimal window struct + doubly-linked z-order list + creation/destruction APIs |
-| GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | 🔄 In progress — basic redraw loop + single test window + mouse-down activation; no dragging/resizing yet |
+| GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | ✅ Complete — WM thread with desktop, taskbar, start menu, dragging/resizing, cursor, event-driven redraw loop |
 | LLM engine | — | ⬜ Not started |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + basic WM test (Phase 10.1–10.4); desktop/taskbar/start menu + apps not started |
+| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + WM + desktop + taskbar + start menu (Phase 10.1–10.6); GUI apps not started |
 
 ### Immediate Next Steps (pick up here)
 
 1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-2. **Phase 10.5 — Desktop + taskbar (optional parallel track)** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c` / `.h` to move the top banner into desktop code and add a Windows-like taskbar and Start button.
+2. **Phase 10.3/10.6 — GUI input wiring + shell integration (optional parallel track)** — finalise `mouse.c` / `keyboard.c` ISR integration with `gui_input_from_*` bridge and add a `startx`/`gui` shell command to enter GUI mode.
 
 ---
 
@@ -689,6 +690,7 @@ AIOS/
 │   ├── panic.c              ← ✅
 │   ├── pf_handler.c         ← ✅
 │   ├── keyboard.c           ← ✅ + E0 extended-key patch
+│   ├── keyboard_gui_hook.c  ← 🔄 Phase 10.3 GUI keyboard callback wiring helper
 │   ├── mouse.c              ← ✅
 │   ├── pmm.c / .h           ← ✅
 │   ├── vmm.c / .h           ← ✅
@@ -722,11 +724,12 @@ AIOS/
 │   │   └── colors.h            ← ✅ Phase 10.1 (UI colors)
 │   ├── gui/
 │   │   ├── input.c / .h        ← ✅ Phase 10.3
+│   │   ├── input_bridge.c      ← 🔄 Phase 10.3 (mouse/keyboard → GUI event bridge)
 │   │   ├── window.c / .h       ← ✅ Phase 10.4
-│   │   ├── wm.c / wm.h         ← 🔄 Phase 10.4/10.6
-│   │   ├── desktop.c           ← ⬜ TODO Phase 10.5
-│   │   ├── taskbar.c / .h      ← ⬜ TODO Phase 10.5
-│   │   └── start_menu.c        ← ⬜ TODO Phase 10.5
+│   │   ├── wm.c / wm.h         ← ✅ Phase 10.4/10.6
+│   │   ├── desktop.c           ← ✅ Phase 10.5
+│   │   ├── taskbar.c / .h      ← ✅ Phase 10.5
+│   │   └── start_menu.c        ← ✅ Phase 10.5
 │   ├── apps/
 │   │   ├── notepad.c / .h      ← ⬜ TODO Phase 11.1
 │   │   ├── explorer.c / .h     ← ⬜ TODO Phase 11.2
@@ -748,4 +751,4 @@ AIOS/
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.5 (desktop, taskbar, and Start menu).
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.6 GUI groundwork extended: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), GUI window core (`kernel/gui/window.c` + `kernel/gui/wm.c`), desktop background (`kernel/gui/desktop.c`), taskbar + Start button + uptime clock (`kernel/gui/taskbar.c` + `.h`), start menu with stub app launchers (`kernel/gui/start_menu.c`), and a running WM thread with mouse dragging/resizing. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.3/10.6 (GUI input wiring from ISR paths + `startx` shell command).
