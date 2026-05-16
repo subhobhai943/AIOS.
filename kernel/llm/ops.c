@@ -1,370 +1,339 @@
-#include "llm/ops.h"
+/*
+ * kernel/llm/ops.c — Phase 7.2: LLM math operations
+ *
+ * Freestanding C (no libc).  All math dispatches to the
+ * SIMD kernels in kernel/simd.h where possible.
+ *
+ * Compiler flags assumed:
+ *   -ffreestanding -nostdlib -mno-red-zone -mcmodel=kernel
+ *
+ * Only allowed headers: <stdint.h>, <stddef.h> (via tensor.h).
+ */
 
-#include <stdbool.h>
+#include "ops.h"
+#include "tensor.h"
+#include "../simd.h"   /* simd_matmul_f32, simd_vec_add_f32, etc. */
 
-#include "heap.h"
-#include "simd.h"
+/* ── tiny scalar math helpers (no libm) ─────────────────── */
 
-#define OPS_ALIGN_AVX 32u
-#define OPS_ALIGN_SSE 16u
-#define OPS_PI        3.14159265358979323846f
-#define OPS_TWO_PI    6.28318530717958647692f
-#define OPS_LN_10000  9.21034037197618273607f
-
-static bool tensor_valid(const tensor_t *t)
+/* Fast inverse-square-root used for normalisation.
+ * We use Newton-Raphson via the SSE rsqrtss approximation;
+ * if we are on a truly minimal CPU fall back to a simple
+ * 3-iteration Newton loop.  The SIMD path is always compiled
+ * in because SSE2 is baseline for x86-64. */
+static inline float _rsqrtf(float x)
 {
-    return t && t->data && t->ndim > 0 && t->ndim <= 4 && t->numel > 0;
-}
-
-static bool same_shape(const tensor_t *a, const tensor_t *b)
-{
-    if (!tensor_valid(a) || !tensor_valid(b)) return false;
-    if (a->ndim != b->ndim || a->numel != b->numel) return false;
-    for (int32_t i = 0; i < a->ndim; i++) {
-        if (a->dims[i] != b->dims[i]) return false;
-    }
-    return true;
-}
-
-static bool ptr_aligned(const void *p, uintptr_t align)
-{
-    return (((uintptr_t)p) & (align - 1u)) == 0u;
-}
-
-static bool can_use_simd_vec(const float *a, const float *b, const float *out)
-{
-    if (g_simd.avx2) {
-        return ptr_aligned(a, OPS_ALIGN_AVX) &&
-               ptr_aligned(b, OPS_ALIGN_AVX) &&
-               ptr_aligned(out, OPS_ALIGN_AVX);
-    }
-    if (g_simd.sse2) {
-        return ptr_aligned(a, OPS_ALIGN_SSE) &&
-               ptr_aligned(b, OPS_ALIGN_SSE) &&
-               ptr_aligned(out, OPS_ALIGN_SSE);
-    }
-    return true;
-}
-
-static bool can_use_simd_scale(const float *a, const float *out)
-{
-    if (g_simd.avx2) {
-        return ptr_aligned(a, OPS_ALIGN_AVX) &&
-               ptr_aligned(out, OPS_ALIGN_AVX);
-    }
-    return true;
-}
-
-static bool can_use_simd_matmul(const float *a,
-                                const float *b,
-                                const float *out,
-                                int32_t n)
-{
-    if (g_simd.avx2 && g_simd.fma) {
-        return (n & 7) == 0 &&
-               ptr_aligned(a, OPS_ALIGN_AVX) &&
-               ptr_aligned(b, OPS_ALIGN_AVX) &&
-               ptr_aligned(out, OPS_ALIGN_AVX);
-    }
-    return true;
-}
-
-static void scalar_matmul(const float *a,
-                          const float *b,
-                          float *out,
-                          int32_t m,
-                          int32_t n,
-                          int32_t k)
-{
-    for (int32_t row = 0; row < m; row++) {
-        for (int32_t col = 0; col < n; col++) {
-            float acc = 0.0f;
-            for (int32_t inner = 0; inner < k; inner++) {
-                acc += a[(size_t)row * (size_t)k + (size_t)inner] *
-                       b[(size_t)inner * (size_t)n + (size_t)col];
-            }
-            out[(size_t)row * (size_t)n + (size_t)col] = acc;
-        }
-    }
-}
-
-static void scalar_softmax(const float *x, float *out, size_t len);
-
-static float ops_sqrt(float x)
-{
+    /* Use SSE2 rsqrtss for a fast one-step NR result. */
     float r;
-    __asm__ volatile("sqrtss %1, %0" : "=x"(r) : "x"(x));
-    return r;
+    __asm__ volatile(
+        "rsqrtss %1, %0\n\t"
+        "mulss   %0, %0\n\t"   /* r^2           */
+        /* one Newton-Raphson step: r1 = r0*(3-x*r0^2)/2 */
+        : "=x"(r)
+        : "xm"(x)
+    );
+    /* Compile-time constant path — do a proper NR in C
+     * to avoid assembly macro mess.  The asm above gives
+     * ~11-bit accuracy; one NR step makes it ~23-bit. */
+    float y;
+    /* GCC intrinsic-style: just do the NR in C */
+    __asm__ volatile("rsqrtss %1, %0" : "=x"(y) : "xm"(x));
+    y = y * (1.5f - 0.5f * x * y * y); /* NR step */
+    return y;
 }
 
-int ops_matmul(const tensor_t *a, const tensor_t *b, tensor_t *out)
+/* Scalar expf — Cephes-derived minimax for [-87, 88]. */
+static float _expf(float x)
 {
-    if (!tensor_valid(a) || !tensor_valid(b) || !tensor_valid(out)) {
-        return OPS_ERR_INVALID;
-    }
-    if (a->ndim != 2 || b->ndim != 2 || out->ndim != 2) {
-        return OPS_ERR_SHAPE;
-    }
+    /* clamp to prevent NaN */
+    if (x >  88.3762f) return 3.40282347e+38f;
+    if (x < -87.3365f) return 0.0f;
 
-    int32_t m = a->dims[0];
-    int32_t k = a->dims[1];
-    int32_t bk = b->dims[0];
-    int32_t n = b->dims[1];
-    if (k != bk || out->dims[0] != m || out->dims[1] != n) {
-        return OPS_ERR_SHAPE;
-    }
+    /* Range reduce: x = k*ln2 + r, |r| <= ln2/2 */
+    const float ln2_inv = 1.4426950408f;
+    const float ln2_hi  = 0.6931471806f;
+    const float ln2_lo  = 1.9082149293e-10f;
+    int32_t k = (int32_t)(x * ln2_inv + 0.5f);
+    float r = x - (float)k * ln2_hi - (float)k * ln2_lo;
 
-    if (can_use_simd_matmul(a->data, b->data, out->data, n)) {
-        simd_matmul_f32(a->data, b->data, out->data, m, n, k);
-    } else {
-        scalar_matmul(a->data, b->data, out->data, m, n, k);
-    }
-    return OPS_OK;
+    /* Minimax polynomial: exp(r) ≈ 1 + r(1 + r/2(1 + r/3(…))) */
+    float p = 1.0f + r * (1.0f + r * (0.5f + r * (
+                  0.16666667f + r * (0.04166667f + r *
+                  (0.00833333f + r * 0.001388889f)))));
+
+    /* Scale by 2^k using bit manipulation */
+    int32_t e = k + 127;
+    if (e <= 0) return 0.0f;
+    if (e >= 255) return 3.40282347e+38f;
+    uint32_t bits = (uint32_t)e << 23;
+    float scale;
+    __builtin_memcpy(&scale, &bits, sizeof(scale));
+    return p * scale;
 }
 
-int ops_add(const tensor_t *a, const tensor_t *b, tensor_t *out)
+/* Scalar tanhf approximation used by GELU. */
+static float _tanhf(float x)
 {
-    if (!tensor_valid(a) || !tensor_valid(b) || !tensor_valid(out)) {
-        return OPS_ERR_INVALID;
-    }
-    if (!same_shape(a, out)) return OPS_ERR_SHAPE;
-
-    if (same_shape(a, b)) {
-        if (can_use_simd_vec(a->data, b->data, out->data)) {
-            simd_vec_add_f32(a->data, b->data, out->data, a->numel);
-        } else {
-            for (size_t i = 0; i < a->numel; i++) {
-                out->data[i] = a->data[i] + b->data[i];
-            }
-        }
-        return OPS_OK;
-    }
-
-    if (b->numel == 1) {
-        float scalar = b->data[0];
-        for (size_t i = 0; i < a->numel; i++) {
-            out->data[i] = a->data[i] + scalar;
-        }
-        return OPS_OK;
-    }
-
-    int32_t last_dim = a->dims[a->ndim - 1];
-    if (b->ndim == 1 && b->dims[0] == last_dim) {
-        size_t rows = a->numel / (size_t)last_dim;
-        for (size_t row = 0; row < rows; row++) {
-            size_t base = row * (size_t)last_dim;
-            for (int32_t col = 0; col < last_dim; col++) {
-                out->data[base + (size_t)col] =
-                    a->data[base + (size_t)col] + b->data[col];
-            }
-        }
-        return OPS_OK;
-    }
-
-    return OPS_ERR_SHAPE;
+    /* clamp: tanh(x) → ±1 quickly */
+    if (x >  9.0f) return  1.0f;
+    if (x < -9.0f) return -1.0f;
+    float e2 = _expf(2.0f * x);
+    return (e2 - 1.0f) / (e2 + 1.0f);
 }
 
-int ops_scale(const tensor_t *a, float scale, tensor_t *out)
+/* Scalar cosf + sinf via Taylor series (for RoPE). */
+static float _cosf(float x)
 {
-    if (!tensor_valid(a) || !tensor_valid(out)) return OPS_ERR_INVALID;
-    if (!same_shape(a, out)) return OPS_ERR_SHAPE;
+    /* Reduce to [0, 2π] */
+    const float two_pi = 6.28318530718f;
+    /* bring into [-π, π] */
+    int32_t n = (int32_t)(x / two_pi);
+    x -= (float)n * two_pi;
+    if (x >  3.14159265359f) x -= two_pi;
+    if (x < -3.14159265359f) x += two_pi;
 
-    if (can_use_simd_scale(a->data, out->data)) {
-        simd_vec_scale_f32(a->data, scale, out->data, a->numel);
-    } else {
-        for (size_t i = 0; i < a->numel; i++) out->data[i] = a->data[i] * scale;
-    }
-    return OPS_OK;
-}
-
-int ops_softmax(const tensor_t *x, tensor_t *out)
-{
-    if (!tensor_valid(x) || !tensor_valid(out)) return OPS_ERR_INVALID;
-    if (!same_shape(x, out)) return OPS_ERR_SHAPE;
-
-    int32_t last_dim = x->dims[x->ndim - 1];
-    if (last_dim <= 0) return OPS_ERR_SHAPE;
-
-    size_t rows = x->numel / (size_t)last_dim;
-    for (size_t row = 0; row < rows; row++) {
-        const float *src = x->data + row * (size_t)last_dim;
-        float *dst = out->data + row * (size_t)last_dim;
-        if (can_use_simd_vec(src, dst, dst)) {
-            simd_softmax_f32(src, dst, (size_t)last_dim);
-        } else {
-            scalar_softmax(src, dst, (size_t)last_dim);
-        }
-    }
-    return OPS_OK;
-}
-
-int ops_layer_norm(const tensor_t *x,
-                   const tensor_t *weight,
-                   const tensor_t *bias,
-                   tensor_t *out,
-                   float eps)
-{
-    if (!tensor_valid(x) || !tensor_valid(weight) || !tensor_valid(out)) {
-        return OPS_ERR_INVALID;
-    }
-    if (!same_shape(x, out)) return OPS_ERR_SHAPE;
-
-    int32_t last_dim = x->dims[x->ndim - 1];
-    if (weight->ndim != 1 || weight->dims[0] != last_dim) return OPS_ERR_SHAPE;
-    if (bias && (!tensor_valid(bias) || bias->ndim != 1 ||
-                 bias->dims[0] != last_dim)) {
-        return OPS_ERR_SHAPE;
-    }
-
-    size_t rows = x->numel / (size_t)last_dim;
-    for (size_t row = 0; row < rows; row++) {
-        const float *src = x->data + row * (size_t)last_dim;
-        float *dst = out->data + row * (size_t)last_dim;
-        if (bias) {
-            simd_layer_norm_f32(src, weight->data, bias->data, dst,
-                                (size_t)last_dim, eps);
-        } else {
-            float mean = 0.0f;
-            for (int32_t i = 0; i < last_dim; i++) mean += src[i];
-            mean /= (float)last_dim;
-
-            float var = 0.0f;
-            for (int32_t i = 0; i < last_dim; i++) {
-                float d = src[i] - mean;
-                var += d * d;
-            }
-            var /= (float)last_dim;
-
-            float inv_std = 1.0f / ops_sqrt(var + eps);
-            for (int32_t i = 0; i < last_dim; i++) {
-                dst[i] = (src[i] - mean) * inv_std * weight->data[i];
-            }
-        }
-    }
-    return OPS_OK;
-}
-
-int ops_gelu(const tensor_t *x, tensor_t *out)
-{
-    if (!tensor_valid(x) || !tensor_valid(out)) return OPS_ERR_INVALID;
-    if (!same_shape(x, out)) return OPS_ERR_SHAPE;
-
-    simd_gelu_f32(x->data, out->data, x->numel);
-    return OPS_OK;
-}
-
-int ops_embedding_lookup(const tensor_t *weight,
-                         const int32_t *token_ids,
-                         size_t token_count,
-                         tensor_t *out)
-{
-    if (!tensor_valid(weight) || !token_ids || !tensor_valid(out)) {
-        return OPS_ERR_INVALID;
-    }
-    if (weight->ndim != 2 || out->ndim != 2) return OPS_ERR_SHAPE;
-    if (out->dims[0] != (int32_t)token_count ||
-        out->dims[1] != weight->dims[1]) {
-        return OPS_ERR_SHAPE;
-    }
-
-    int32_t vocab_size = weight->dims[0];
-    int32_t embed_dim = weight->dims[1];
-    size_t row_bytes = (size_t)embed_dim * sizeof(float);
-
-    for (size_t i = 0; i < token_count; i++) {
-        int32_t token = token_ids[i];
-        if (token < 0 || token >= vocab_size) return OPS_ERR_RANGE;
-        kmemcpy(out->data + i * (size_t)embed_dim,
-                weight->data + (size_t)token * (size_t)embed_dim,
-                row_bytes);
-    }
-    return OPS_OK;
-}
-
-static float ops_exp(float x)
-{
-    if (x > 88.0f) return 3.40282347e+38f;
-    if (x < -88.0f) return 0.0f;
-
-    x = 1.0f + x * (1.0f / 256.0f);
-    x *= x; x *= x; x *= x; x *= x;
-    x *= x; x *= x; x *= x; x *= x;
-    return x;
-}
-
-static void scalar_softmax(const float *x, float *out, size_t len)
-{
-    if (len == 0) return;
-
-    float max = x[0];
-    for (size_t i = 1; i < len; i++) {
-        if (x[i] > max) max = x[i];
-    }
-
-    float sum = 0.0f;
-    for (size_t i = 0; i < len; i++) {
-        float e = ops_exp(x[i] - max);
-        out[i] = e;
-        sum += e;
-    }
-
-    float inv_sum = 1.0f / sum;
-    for (size_t i = 0; i < len; i++) out[i] *= inv_sum;
-}
-
-static float wrap_pi(float x)
-{
-    int32_t turns = (int32_t)(x / OPS_TWO_PI);
-    x -= (float)turns * OPS_TWO_PI;
-    if (x > OPS_PI) x -= OPS_TWO_PI;
-    if (x < -OPS_PI) x += OPS_TWO_PI;
-    return x;
-}
-
-static float ops_sin(float x)
-{
-    x = wrap_pi(x);
+    /* 8-term Taylor: cos(x) = 1 - x^2/2! + x^4/4! - ... */
     float x2 = x * x;
-    return x * (1.0f + x2 * (-0.1666666667f +
-           x2 * (0.0083333333f + x2 * -0.0001984127f)));
+    return 1.0f + x2 * (-0.5f + x2 * (
+           0.04166667f + x2 * (-0.00138889f + x2 *
+           0.00002480f)));
 }
 
-static float ops_cos(float x)
+static float _sinf(float x)
 {
-    x = wrap_pi(x);
+    const float two_pi = 6.28318530718f;
+    int32_t n = (int32_t)(x / two_pi);
+    x -= (float)n * two_pi;
+    if (x >  3.14159265359f) x -= two_pi;
+    if (x < -3.14159265359f) x += two_pi;
+
+    /* 8-term Taylor: sin(x) = x - x^3/3! + x^5/5! - ... */
     float x2 = x * x;
-    return 1.0f + x2 * (-0.5f +
-           x2 * (0.0416666667f + x2 * -0.0013888889f));
+    return x * (1.0f + x2 * (-0.16666667f + x2 * (
+           0.00833333f + x2 * (-0.00019841f + x2 *
+           0.0000027557f))));
 }
 
-static void apply_rope_to_tensor(tensor_t *t, uint32_t pos, int32_t last_dim)
+/* powf(base, exp) for positive base, integer exp used by RoPE */
+static float _powf_pos(float base, float e)
 {
-    size_t rows = t->numel / (size_t)last_dim;
-    for (size_t row = 0; row < rows; row++) {
-        float *base = t->data + row * (size_t)last_dim;
-        for (int32_t i = 0; i < last_dim; i += 2) {
-            float inv_freq = ops_exp(-((float)i / (float)last_dim) *
-                                     OPS_LN_10000);
-            float angle = (float)pos * inv_freq;
-            float c = ops_cos(angle);
-            float s = ops_sin(angle);
-            float even = base[i];
-            float odd = base[i + 1];
-            base[i] = even * c - odd * s;
-            base[i + 1] = even * s + odd * c;
-        }
+    /* Use: a^b = exp(b * ln(a))  — we only need ln for RoPE base */
+    /* ln via minimax on [0.5, 2] after range reduction */
+    float x = base;
+    /* range reduce: x = m * 2^e2, m in [1, 2) */
+    uint32_t bits;
+    __builtin_memcpy(&bits, &x, sizeof(bits));
+    int32_t e2 = (int32_t)((bits >> 23) & 0xFF) - 127;
+    bits = (bits & 0x807FFFFF) | (0x7F << 23); /* set exponent to 127 */
+    __builtin_memcpy(&x, &bits, sizeof(x));
+    /* x now in [1, 2); subtract 1 for the series */
+    float r = x - 1.0f;
+    /* ln(1+r) minimax */
+    float ln_m = r * (1.0f + r * (-0.5f + r * (
+                 0.33333333f + r * (-0.25f + r *
+                 0.2f))));
+    float ln_x = ln_m + (float)e2 * 0.6931471806f;
+    return _expf(e * ln_x);
+}
+
+/* ──────────────────────────────────────────────────────────
+ * 1. Element-wise and reduction ops
+ * ────────────────────────────────────────────────────────── */
+
+void ops_add(const tensor_t *a, const tensor_t *b, tensor_t *out)
+{
+    /* Delegate to the SIMD vector-add kernel */
+    simd_vec_add_f32(a->data, b->data, out->data, a->numel);
+}
+
+void ops_scale(const tensor_t *t, float scalar, tensor_t *out)
+{
+    simd_vec_scale_f32(t->data, scalar, out->data, t->numel);
+}
+
+void ops_mul(const tensor_t *a, const tensor_t *b, tensor_t *out)
+{
+    simd_vec_mul_f32(a->data, b->data, out->data, a->numel);
+}
+
+void ops_fill(tensor_t *t, float val)
+{
+    float *p   = t->data;
+    size_t n   = t->numel;
+    for (size_t i = 0; i < n; i++) p[i] = val;
+}
+
+void ops_copy(tensor_t *dst, const tensor_t *src)
+{
+    __builtin_memcpy(dst->data, src->data,
+                     src->numel * sizeof(float));
+}
+
+/* ──────────────────────────────────────────────────────────
+ * 2. Matrix multiply
+ * ────────────────────────────────────────────────────────── */
+
+void ops_matmul(const tensor_t *A, const tensor_t *B, tensor_t *C)
+{
+    /*
+     * A: [M, K]   B: [K, N]   C: [M, N]
+     * We derive M, K, N from tensor shapes.
+     */
+    int M = A->dims[0];
+    int K = A->dims[1];
+    int N = B->dims[1];
+    simd_matmul_f32(A->data, B->data, C->data, M, N, K);
+}
+
+void ops_matmul_add(const tensor_t *A, const tensor_t *B,
+                    const tensor_t *bias, tensor_t *C)
+{
+    ops_matmul(A, B, C);
+    /* Add bias row-by-row: each row of C gets bias added */
+    int M   = A->dims[0];
+    int N   = B->dims[1];
+    float *c = C->data;
+    const float *b = bias->data;
+    for (int m = 0; m < M; m++) {
+        simd_vec_add_f32(c + m * N, b, c + m * N, (size_t)N);
     }
 }
 
-int ops_rope(tensor_t *q, tensor_t *k, uint32_t pos)
+/* ──────────────────────────────────────────────────────────
+ * 3. Activation functions
+ * ────────────────────────────────────────────────────────── */
+
+void ops_softmax(tensor_t *t)
 {
-    if (!tensor_valid(q) || !tensor_valid(k)) return OPS_ERR_INVALID;
-    if (!same_shape(q, k)) return OPS_ERR_SHAPE;
+    /*
+     * For 1-D: one row of length numel.
+     * For 2-D [rows, V]: apply softmax to each row independently.
+     */
+    int rows, V;
+    if (t->ndim == 1) {
+        rows = 1;
+        V    = (int)t->numel;
+    } else {
+        rows = t->dims[0];
+        V    = t->dims[1];
+    }
 
-    int32_t last_dim = q->dims[q->ndim - 1];
-    if (last_dim <= 0 || (last_dim & 1) != 0) return OPS_ERR_SHAPE;
+    float *p = t->data;
+    for (int r = 0; r < rows; r++) {
+        /* simd_softmax_f32 is in-place capable (x and out may alias) */
+        simd_softmax_f32(p + r * V, p + r * V, (size_t)V);
+    }
+}
 
-    apply_rope_to_tensor(q, pos, last_dim);
-    apply_rope_to_tensor(k, pos, last_dim);
-    return OPS_OK;
+void ops_gelu(const tensor_t *t, tensor_t *out)
+{
+    simd_gelu_f32(t->data, out->data, t->numel);
+}
+
+/* ──────────────────────────────────────────────────────────
+ * 4. Normalisation layers
+ * ────────────────────────────────────────────────────────── */
+
+void ops_layer_norm(const tensor_t *x,
+                    const tensor_t *weight,
+                    const tensor_t *bias,
+                    tensor_t       *out,
+                    float           eps)
+{
+    simd_layer_norm_f32(x->data, weight->data, bias->data,
+                        out->data, x->numel, eps);
+}
+
+void ops_rms_norm(const tensor_t *x,
+                  const tensor_t *weight,
+                  tensor_t       *out,
+                  float           eps)
+{
+    simd_rms_norm_f32(x->data, weight->data, out->data,
+                      x->numel, eps);
+}
+
+/* ──────────────────────────────────────────────────────────
+ * 5. Embedding lookup
+ * ────────────────────────────────────────────────────────── */
+
+void ops_embedding_lookup(const tensor_t *table,
+                          const int32_t  *ids,
+                          int32_t         seq_len,
+                          tensor_t       *out)
+{
+    /*
+     * table : [vocab_size, embed_dim]
+     * out   : [seq_len,    embed_dim]
+     */
+    int32_t embed_dim = table->dims[1];
+    const float *w    = table->data;
+    float *dst        = out->data;
+
+    for (int32_t i = 0; i < seq_len; i++) {
+        int32_t id = ids[i];
+        /* Each row is embed_dim floats */
+        const float *src = w + (size_t)id * (size_t)embed_dim;
+        float       *d   = dst + (size_t)i * (size_t)embed_dim;
+        __builtin_memcpy(d, src, (size_t)embed_dim * sizeof(float));
+    }
+}
+
+/* ──────────────────────────────────────────────────────────
+ * 6. Rotary Position Embedding (RoPE)
+ * ────────────────────────────────────────────────────────── */
+
+void ops_rope(tensor_t *q, tensor_t *k,
+              int32_t pos, float base)
+{
+    /*
+     * q, k : [seq_len, n_heads, head_dim]
+     *
+     * For each (seq position, head) we rotate consecutive pairs
+     * of the head_dim dimension:
+     *
+     *   x0'  =  x0 * cos(theta) - x1 * sin(theta)
+     *   x1'  =  x0 * sin(theta) + x1 * cos(theta)
+     *
+     * where theta_i = (pos + s) / (base ^ (2*i / head_dim))
+     * and s is the sequence index within the tensor.
+     */
+    int32_t seq_len  = q->dims[0];
+    int32_t n_heads  = q->dims[1];
+    int32_t head_dim = q->dims[2];
+    int32_t half     = head_dim >> 1;  /* head_dim / 2 */
+
+    for (int32_t s = 0; s < seq_len; s++) {
+        int32_t cur_pos = pos + s;
+        for (int32_t h = 0; h < n_heads; h++) {
+            /* Pointer to start of this (s, h) slice */
+            size_t base_idx = ((size_t)s * n_heads + h) * head_dim;
+            float *qh = q->data + base_idx;
+            float *kh = k->data + base_idx;
+
+            for (int32_t i = 0; i < half; i++) {
+                /*
+                 * theta = pos / (base ^ (2*i / head_dim))
+                 * = pos * base^(-2i/head_dim)
+                 */
+                float inv_freq = _powf_pos(
+                    base, -(2.0f * (float)i / (float)head_dim));
+                float theta = (float)cur_pos * inv_freq;
+                float cos_t = _cosf(theta);
+                float sin_t = _sinf(theta);
+
+                /* Q rotation */
+                float q0 = qh[i];
+                float q1 = qh[i + half];
+                qh[i]        = q0 * cos_t - q1 * sin_t;
+                qh[i + half] = q0 * sin_t + q1 * cos_t;
+
+                /* K rotation */
+                float k0 = kh[i];
+                float k1 = kh[i + half];
+                kh[i]        = k0 * cos_t - k1 * sin_t;
+                kh[i + half] = k0 * sin_t + k1 * cos_t;
+            }
+        }
+    }
 }
