@@ -34,4 +34,11 @@ int  mouse_get_event(mouse_event_t *out);
 extern int mouse_x;
 extern int mouse_y;
 
+/* Optional GUI callback hook (Phase 10.3): when set, mouse_handle_irq()
+ * should call this with each assembled mouse_event_t instead of (or in addition
+ * to) updating the VGA text-mode cursor. The GUI bridge will convert these
+ * events into gui_event_t structures for the window manager.
+ */
+void mouse_set_gui_callback(void (*cb)(const mouse_event_t *));
+
 #endif /* MOUSE_H */
