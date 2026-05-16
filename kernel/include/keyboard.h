@@ -17,10 +17,18 @@ typedef struct {
     uint8_t ascii;      /* translated ASCII, 0 if non-printable */
     uint8_t shift;      /* 1 if Shift was held */
     uint8_t ctrl;       /* 1 if Ctrl was held  */
+    uint8_t pressed;    /* 1 on key-down, 0 on key-up (Phase 10.3 GUI hook) */
 } key_event_t;
 
 void keyboard_init(void);
 void keyboard_handle_irq(void);
 int  keyboard_get_event(key_event_t *out);
+
+/* Optional GUI callback hook (Phase 10.3):
+ * If set, the keyboard driver will call this from its IRQ handler
+ * with fully-populated key_event_t instances so the GUI layer can
+ * translate them into gui_event_t structures.
+ */
+void keyboard_set_gui_callback(void (*cb)(const key_event_t *));
 
 #endif /* KEYBOARD_H */
