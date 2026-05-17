@@ -38,7 +38,7 @@ jobs:
           SOURCE_CHANGED=$(echo "$CHANGED" | grep -E '^(kernel|boot)/' | wc -l)
 
           # Check if roadmap was also updated
-          ROADMAP_CHANGED=$(echo "$CHANGED" | grep -iE '^ROADMAP/' | wc -l)
+          ROADMAP_CHANGED=$(echo "$CHANGED" | grep -iE '^ROADMAP\.md$' | wc -l)
 
           echo "source_changed=$SOURCE_CHANGED" >> $GITHUB_OUTPUT
           echo "roadmap_changed=$ROADMAP_CHANGED" >> $GITHUB_OUTPUT
@@ -58,12 +58,12 @@ jobs:
                 'This PR modifies source files in `kernel/` or `boot/` but does **not** update the ROADMAP.',
                 '',
                 'If this PR completes or advances a roadmap task, please update:',
-                '`ROADMAP/⚡ AIOS — Development Roadmap.md`',
+                '`ROADMAP.md`',
                 '',
                 'Mark completed items with ✅ and update the milestone summary table.',
                 '',
                 '_This is a reminder, not a blocker. You can ignore it if no roadmap tasks were affected._'
-              ].join('ORE')
+              ].join('\n')
             })
 
       - name: Roadmap is up to date
