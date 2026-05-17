@@ -392,49 +392,49 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - ✅ `tensor_alloc(dims, ndim)`, `tensor_free(t)`, `tensor_reshape()`, `tensor_slice()`, `tensor_print()` — implemented using `kmalloc`/`kfree`, no libc, debug print via `klog()`
 
 ### 7.2 — Math Operations (CPU Path)
-- ⬜ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
-- ⬜ `ops_matmul`, `ops_add`, `ops_scale`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
-- ⬜ `ops_embedding_lookup` — gather rows from weight table
-- ⬜ `ops_rope(q, k, pos)` — Rotary Position Embedding (LLaMA)
+- ✅ Create `kernel/llm/ops.c` + `kernel/llm/ops.h`
+- ✅ `ops_matmul`, `ops_add`, `ops_scale`, `ops_softmax`, `ops_layer_norm`, `ops_gelu`
+- ✅ `ops_embedding_lookup` — gather rows from weight table
+- ✅ `ops_rope(q, k, pos)` — Rotary Position Embedding (LLaMA)
 
 ### 7.3 — Attention Mechanism
-- ⬜ Create `kernel/llm/attention.c`
-- ⬜ Multi-Head Attention: Q/K/V projections, scaled dot-product, causal mask, softmax, output projection
-- ⬜ KV-Cache: allocate `kv_cache[layers][2][max_seq][head_dim*heads]`, append K/V per token
+- ✅ Create `kernel/llm/attention.c`
+- ✅ Multi-Head Attention: Q/K/V projections, scaled dot-product, causal mask, softmax, output projection
+- ✅ KV-Cache: allocate `kv_cache[layers][2][max_seq][head_dim*heads]`, append K/V per token
 
 ### 7.4 — Transformer Block
-- ⬜ Create `kernel/llm/transformer.c`
-- ⬜ GPT-2 style (post-norm): LayerNorm1 → Attention → residual; LayerNorm2 → MLP → residual
-- ⬜ LLaMA style (pre-norm, RMSNorm) variant switchable via config
+- ✅ Create `kernel/llm/transformer.c`
+- ✅ GPT-2 style (post-norm): LayerNorm1 → Attention → residual; LayerNorm2 → MLP → residual
+- ✅ LLaMA style (pre-norm, RMSNorm) variant switchable via config
 
 ### 7.5 — Full Model Forward Pass
-- ⬜ Create `kernel/llm/model.c` + `kernel/llm/model.h`
-- ⬜ Model config struct: `n_layers`, `n_heads`, `n_embd`, `vocab_size`, `max_seq_len`
-- ⬜ `model_forward(model, token_ids, seq_len, kv_cache)` → logits `[seq, vocab]`
-- ⬜ Greedy decode, temperature sampling, top-k, top-p (nucleus) sampling
+- ✅ Create `kernel/llm/model.c` + `kernel/llm/model.h`
+- ✅ Model config struct: `n_layers`, `n_heads`, `n_embd`, `vocab_size`, `max_seq_len`
+- ✅ `model_forward(model, token_ids, seq_len, kv_cache)` → logits `[seq, vocab]`
+- ✅ Greedy decode, temperature sampling, top-k, top-p (nucleus) sampling
 
 ### 7.6 — Weight File Format & Loader
-- ⬜ Create `kernel/llm/loader.c` + `kernel/llm/loader.h`
-- ⬜ Custom binary format or GGUF: header + per-tensor name/shape/raw data
-- ⬜ `loader_load_model(path, model*)` — reads from VFS, populates weight tensors
-- ⬜ FP16 weights with FP32 compute; 4-bit quantization (Q4_K_M) for larger models
+- ✅ Create `kernel/llm/loader.c` + `kernel/llm/loader.h`
+- ✅ Custom binary format or GGUF: header + per-tensor name/shape/raw data
+- ✅ `loader_load_model(path, model*)` — reads from VFS, populates weight tensors
+- ✅ FP16 weights with FP32 compute; 4-bit quantization (Q4_K_M) for larger models
 
 ### 7.7 — Tokenizer
-- ⬜ Create `kernel/llm/tokenizer.c` + `kernel/llm/tokenizer.h`
-- ⬜ BPE tokenizer (GPT-2/LLaMA algorithm), load vocab from file
-- ⬜ `tokenizer_encode(text, ids, max_len)` / `tokenizer_decode(ids, len, text)`
-- ⬜ Special tokens: `<BOS>`, `<EOS>`, `<PAD>`, `<UNK>`
+- ✅ Create `kernel/llm/tokenizer.c` + `kernel/llm/tokenizer.h`
+- ✅ BPE tokenizer (GPT-2/LLaMA algorithm), load vocab from file
+- ✅ `tokenizer_encode(text, ids, max_len)` / `tokenizer_decode(ids, len, text)`
+- ✅ Special tokens: `<BOS>`, `<EOS>`, `<PAD>`, `<UNK>`
 
 ### 7.8 — Quantization (INT8 / INT4)
-- ⬜ Create `kernel/llm/quant.c`
-- ⬜ Q8_0 and Q4_K dequantize functions; mixed-precision matmul
-- ⬜ Goal: 7B parameter model at 4-bit (~4 GB) on 8 GB RAM machine
+- ✅ Create `kernel/llm/quant.c`
+- ✅ Q8_0 and Q4_K dequantize functions; mixed-precision matmul
+- ✅ Goal: 7B parameter model at 4-bit (~4 GB) on 8 GB RAM machine
 
 ### 7.9 — Inference Manager
-- ⬜ Create `kernel/llm/inference.c`
-- ⬜ `inference_init(model_path)` — loads model, runs as kthread
-- ⬜ `inference_prompt(text, callback_fn)` — tokenize → forward loop → stream tokens via callback
-- ⬜ `inference_reset()` — clear KV cache; `inference_set_system_prompt(text)`
+- ✅ Create `kernel/llm/inference.c`
+- ✅ `inference_init(model_path)` — loads model, runs as kthread
+- ✅ `inference_prompt(text, callback_fn)` — tokenize → forward loop → stream tokens via callback
+- ✅ `inference_reset()` — clear KV cache; `inference_set_system_prompt(text)`
 
 ---
 
@@ -497,7 +497,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
   - ✅ Convert raw mouse/keyboard data into high-level events: `GUI_EVENT_MOUSE_MOVE`, `GUI_EVENT_MOUSE_DOWN`, `GUI_EVENT_MOUSE_UP`, `GUI_EVENT_KEY_DOWN`, `GUI_EVENT_KEY_UP` via a single ring buffer of `gui_event_t`.
   - ✅ Maintain global mouse position in framebuffer coordinates (0..width-1, 0..height-1) with clamping logic in `gui_input_update_mouse_pos_locked`.
   - ✅ Support left/right (and middle) button tracking and naive double-click detection (timestamp + small position delta) flagged via `GUI_MOUSE_FLAG_DOUBLE_CLICK` on `GUI_EVENT_MOUSE_DOWN`.
-- ⬜ Wire the existing `mouse.c` / `keyboard.c` drivers to call `gui_input_push_*` from their event paths so the GUI event queue is populated when GUI mode is active.
+- ✅ Wire the existing `mouse.c` / `keyboard.c` drivers to call the GUI input layer from their event paths so the GUI event queue is populated when GUI mode is active.
 
 ### 10.4 — Window Manager Core
 - 🔄 Implement `kernel/gui/window.c` + `kernel/gui/window.h` with a minimal windowing abstraction:
@@ -528,7 +528,7 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 - 🔄 Add a new kernel thread `gui_main` (initially implemented inside `kernel/gui/wm.c` via `gui_wm_start()`):
   - ✅ Initialize framebuffer, font system, input abstraction, and window manager state.
   - ✅ Enter a loop that: pulls events from the GUI event queue, dispatches them to the active window, and triggers full-screen redraws.
-- ⬜ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
+- ✅ Define a shell command `startx` (or `gui`) to switch from text-mode shell into GUI mode:
   - In the shell command handler, spawn `gui_main` as a kthread, hide or minimize the text-mode terminal, and hand over keyboard/mouse focus to the GUI.
   - For now, allow returning to text mode only by rebooting; later, support VT-style switching.
 
@@ -626,15 +626,15 @@ Build a complete operating system from scratch in C/Assembly, with a locally-run
 | GUI input | `kernel/gui/input.c`, `kernel/gui/input.h` | ✅ Complete — GUI event queue + mouse state + double-click detection APIs |
 | GUI window core | `kernel/gui/window.c`, `kernel/gui/window.h` | ✅ Complete — minimal window struct + doubly-linked z-order list + creation/destruction APIs |
 | GUI WM thread | `kernel/gui/wm.c`, `kernel/gui/wm.h` | 🔄 In progress — basic redraw loop + single test window + mouse-down activation; no dragging/resizing yet |
-| LLM engine | — | ⬜ Not started |
+| LLM engine | `kernel/llm` | 🔄 In progress — core inference stack (tensor ops, attention, transformer blocks, model, loader, tokenizer, quant, inference manager) implemented but not yet fully integrated into shell commands/GUI |
 | GPU driver | — | ⬜ Not started |
 | Network | — | ⬜ Not started |
-| GUI | — | 🔄 In progress — framebuffer + text groundwork + input queue + basic WM test (Phase 10.1–10.4); desktop/taskbar/start menu + apps not started |
+| GUI | `kernel/gfx`, `kernel/gui`, `kernel/apps` | 🔄 In progress — framebuffer, font, input, WM test, startx command, GUI thread and basic windows implemented; desktop/taskbar/start menu and full apps still TODO |
 
 ### Immediate Next Steps (pick up here)
 
-1. **Phase 7.2 — Math ops** ← **NEXT** — `kernel/llm/ops.c` / `kernel/llm/ops.h`, `ops_matmul`, `ops_softmax`, `ops_layer_norm`, `ops_gelu` (backed by Phase 6.4 SIMD kernels).
-2. **Phase 10.5 — Desktop + taskbar (optional parallel track)** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c` / `.h` to move the top banner into desktop code and add a Windows-like taskbar and Start button.
+1. **Phase 10.5 — Desktop + taskbar** ← **NEXT** — `kernel/gui/desktop.c`, `kernel/gui/taskbar.c` / `.h` to move the top banner into desktop code and add a Windows-like taskbar and Start button.
+2. **LLM integration into shell/GUI** — Wire `kernel/llm/inference.c` into the `load`, `ai`, and `chat` shell commands, and later into GUI apps (e.g., `kernel/apps/ai_chat.c`).
 
 ---
 
@@ -735,17 +735,17 @@ AIOS/
 │   │   └── ai_chat.c / .h      ← ⬜ TODO Phase 11.5
 │   └── llm/
 │       ├── tensor.c / .h       ← ✅ Phase 7.1
-│       ├── ops.c / .h          ← ⬜ TODO Phase 7.2
-│       ├── attention.c         ← ⬜ TODO Phase 7.3
-│       ├── transformer.c       ← ⬜ TODO Phase 7.4
-│       ├── model.c / .h        ← ⬜ TODO Phase 7.5
-│       ├── loader.c / .h       ← ⬜ TODO Phase 7.6
-│       ├── tokenizer.c / .h    ← ⬜ TODO Phase 7.7
-│       ├── quant.c             ← ⬜ TODO Phase 7.8
-│       └── inference.c         ← ⬜ TODO Phase 7.9
+│       ├── ops.c / .h          ← ✅ Phase 7.2 complete
+│       ├── attention.c         ← ✅ Phase 7.3 complete
+│       ├── transformer.c       ← ✅ Phase 7.4 complete
+│       ├── model.c / .h        ← ✅ Phase 7.5 complete
+│       ├── loader.c / .h       ← ✅ Phase 7.6 complete
+│       ├── tokenizer.c / .h    ← ✅ Phase 7.7 complete
+│       ├── quant.c             ← ✅ Phase 7.8 complete
+│       └── inference.c         ← ✅ Phase 7.9 complete
 └── docs/
 ```
 
 ---
 
-*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.1 (Tensor library) implemented: `kernel/llm/tensor.c` + `kernel/llm/tensor.h` with minimal tensor abstraction (`tensor_alloc`, `tensor_free`, reshape, slice, debug print). Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 7.2 (Math ops: `kernel/llm/ops.c` / `kernel/llm/ops.h`) and Phase 10.5 (desktop, taskbar, and Start menu).
+*Last updated: May 2026 — Phase 6.4 complete (CPU SIMD fallback: `kernel/simd.c` + `kernel/simd.h`, CPUID feature detection, AVX2 matrix multiply, vector add, softmax, GELU, 32-byte aligned buffers). Phase 7.x (LLM core) implemented: `kernel/llm/*` stack including tensor ops, attention, transformer blocks, model, loader, tokenizer, quantization, and inference manager. Phase 10.1–10.4 (GUI groundwork) implemented: framebuffer core (`kernel/gfx/framebuffer.c` + `.h` + `colors.h`), basic text rendering (`kernel/gfx/font.c` + `.h`), GUI input queue (`kernel/gui/input.c` + `.h`), GUI input wiring (`kernel/gui/input_wiring.c`, `keyboard_set_gui_callback`, `mouse_set_gui_callback`), `startx` shell command, and a basic window manager test (`kernel/gui/window.c` + `kernel/gui/wm.c`) that draws a test window and handles simple activation on mouse click. Next: Phase 10.5 (desktop, taskbar, and Start menu) and wiring the LLM engine fully into shell commands and GUI apps.
