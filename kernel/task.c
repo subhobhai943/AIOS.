@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+extern void task_entry_trampoline(void);
+
 /* ----------------------------------------------------------------
  * Static task table
  * ---------------------------------------------------------------- */
@@ -92,13 +94,14 @@ task_t *task_create(void (*entry)(void), uint32_t stack_size, const char *name)
      * switch_context pops: rbp, rbx, r12, r13, r14, r15, then ret.
      * So we push (in memory from high to low):
      *
-     *   [stack_top - 8 ]  = entry_fn   ← popped by `ret`
-     *   [stack_top - 16]  = r15 = 0
-     *   [stack_top - 24]  = r14 = 0
-     *   [stack_top - 32]  = r13 = 0
-     *   [stack_top - 40]  = r12 = 0
-     *   [stack_top - 48]  = rbx = 0
-     *   [stack_top - 56]  = rbp = 0    ← RSP stored here
+     *   [stack_top - 8 ]  = entry_fn   ← popped by trampoline
+     *   [stack_top - 16]  = trampoline ← popped by `ret`
+     *   [stack_top - 24]  = r15 = 0
+     *   [stack_top - 32]  = r14 = 0
+     *   [stack_top - 40]  = r13 = 0
+     *   [stack_top - 48]  = r12 = 0
+     *   [stack_top - 56]  = rbx = 0
+     *   [stack_top - 64]  = rbp = 0    ← RSP stored here
      * ---------------------------------------------------------------- */
     uint64_t stack_top = (uint64_t)(uintptr_t)stack + stack_size;
     /* x86-64 ABI: RSP must be 16-byte aligned before CALL; after CALL
@@ -108,8 +111,9 @@ task_t *task_create(void (*entry)(void), uint32_t stack_size, const char *name)
     stack_top = stack_top & ~(uint64_t)15u;  /* align down to 16 */
 
     uint64_t *sp = (uint64_t *)stack_top;
-    /* Push "return address" = entry function pointer. */
-    sp--;  *sp = (uint64_t)(uintptr_t)entry;   /* ret pops this    */
+    /* Push trampoline metadata. ret enters the trampoline, which pops entry. */
+    sp--;  *sp = (uint64_t)(uintptr_t)entry;
+    sp--;  *sp = (uint64_t)(uintptr_t)task_entry_trampoline;
     /* Push callee-saved registers (all zero). */
     sp--;  *sp = 0;   /* r15 */
     sp--;  *sp = 0;   /* r14 */

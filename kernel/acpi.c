@@ -14,8 +14,11 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include "acpi.h"
+#include "include/vmm.h"
 #include "serial.h"    /* klog() */
 #include "panic.h"     /* kernel_panic() */
+
+#define ACPI_PAGE_SIZE 4096u
 
 /* -----------------------------------------------------------------------
  * Low-level I/O helpers (no ioport.h assumed yet)
@@ -74,6 +77,22 @@ static bool acpi_checksum(const void *ptr, size_t len) {
     return sum == 0;
 }
 
+static void *acpi_map_phys(uint64_t phys, size_t len) {
+    if (phys == 0 || len == 0) return NULL;
+    uint64_t base = phys & ~(uint64_t)(ACPI_PAGE_SIZE - 1u);
+    uint64_t off = phys - base;
+    size_t pages = (size_t)((off + len + ACPI_PAGE_SIZE - 1u) / ACPI_PAGE_SIZE);
+    vmm_map_mmio(base, pages);
+    return (void *)(uintptr_t)phys;
+}
+
+static acpi_sdt_header_t *acpi_map_sdt(uint64_t phys) {
+    acpi_sdt_header_t *h =
+        (acpi_sdt_header_t *)acpi_map_phys(phys, sizeof(acpi_sdt_header_t));
+    if (!h || h->length < sizeof(acpi_sdt_header_t)) return NULL;
+    return (acpi_sdt_header_t *)acpi_map_phys(phys, h->length);
+}
+
 /* -----------------------------------------------------------------------
  * RSDP scan
  *
@@ -122,7 +141,8 @@ static acpi_sdt_header_t *acpi_find_table_rsdt(acpi_sdt_header_t *rsdt,
     uint32_t n = (rsdt->length - sizeof(acpi_sdt_header_t)) / 4;
     uint32_t *entries = (uint32_t *)((uintptr_t)rsdt + sizeof(acpi_sdt_header_t));
     for (uint32_t i = 0; i < n; i++) {
-        acpi_sdt_header_t *h = (acpi_sdt_header_t *)(uintptr_t)entries[i];
+        acpi_sdt_header_t *h = acpi_map_sdt(entries[i]);
+        if (!h) continue;
         if (acpi_memcmp(h->signature, sig, 4) == 0) {
             if (acpi_checksum(h, h->length)) return h;
         }
@@ -135,7 +155,8 @@ static acpi_sdt_header_t *acpi_find_table_xsdt(acpi_sdt_header_t *xsdt,
     uint32_t n = (xsdt->length - sizeof(acpi_sdt_header_t)) / 8;
     uint64_t *entries = (uint64_t *)((uintptr_t)xsdt + sizeof(acpi_sdt_header_t));
     for (uint32_t i = 0; i < n; i++) {
-        acpi_sdt_header_t *h = (acpi_sdt_header_t *)(uintptr_t)entries[i];
+        acpi_sdt_header_t *h = acpi_map_sdt(entries[i]);
+        if (!h) continue;
         if (acpi_memcmp(h->signature, sig, 4) == 0) {
             if (acpi_checksum(h, h->length)) return h;
         }
@@ -210,16 +231,18 @@ bool acpi_init(void) {
     acpi_sdt_header_t *fadt_hdr = NULL;
     if (rsdp->revision >= 2) {
         acpi_rsdp_v2_t *rsdp2 = (acpi_rsdp_v2_t *)rsdp;
-        acpi_sdt_header_t *xsdt =
-            (acpi_sdt_header_t *)(uintptr_t)rsdp2->xsdt_address;
-        if (acpi_checksum(xsdt, xsdt->length)) {
+        acpi_sdt_header_t *xsdt = acpi_map_sdt(rsdp2->xsdt_address);
+        if (xsdt && acpi_checksum(xsdt, xsdt->length)) {
             klog("[ACPI] Using XSDT\n");
             fadt_hdr = acpi_find_table_xsdt(xsdt, "FACP");
         }
     }
     if (!fadt_hdr) {
-        acpi_sdt_header_t *rsdt =
-            (acpi_sdt_header_t *)(uintptr_t)rsdp->rsdt_address;
+        acpi_sdt_header_t *rsdt = acpi_map_sdt(rsdp->rsdt_address);
+        if (!rsdt) {
+            klog("[ACPI] RSDT not mapped\n");
+            return false;
+        }
         if (!acpi_checksum(rsdt, rsdt->length)) {
             klog("[ACPI] RSDT checksum bad\n");
             return false;
@@ -268,8 +291,8 @@ bool acpi_init(void) {
     else
         dsdt_phys = (uintptr_t)fadt->dsdt;
 
-    acpi_sdt_header_t *dsdt = (acpi_sdt_header_t *)dsdt_phys;
-    if (!acpi_checksum(dsdt, dsdt->length)) {
+    acpi_sdt_header_t *dsdt = acpi_map_sdt(dsdt_phys);
+    if (!dsdt || !acpi_checksum(dsdt, dsdt->length)) {
         klog("[ACPI] DSDT checksum bad — shutdown may use fallback\n");
     } else {
         uint16_t typa = 0, typb = 0;

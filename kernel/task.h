@@ -10,7 +10,8 @@
  * Stack layout when a task is first switched to:
  *
  *   HIGH  ┌──────────────────────────────────────┐
- *         │  (entry_fn address — popped by ret)  │ ← initial "return address"
+ *         │  entry_fn address                    │ ← popped by trampoline
+ *         │  task_entry_trampoline               │ ← initial return address
  *         │  r15 = 0                             │
  *         │  r14 = 0                             │
  *         │  r13 = 0                             │

@@ -41,6 +41,15 @@ header_start:
     dd header_end - header_start
     dd -(MB2_MAGIC + MB2_ARCH_I386 + (header_end - header_start))
 
+    ; Request a 32-bit linear framebuffer for the GUI.
+    dw 5
+    dw 0
+    dd 20
+    dd 1024
+    dd 768
+    dd 32
+align 8
+
     ; End tag (required)
     dw 0
     dw 0
@@ -83,7 +92,18 @@ kernel_entry:
     or  eax, 0x03
     mov [pdpt_table], eax
 
-    mov dword [pd_table], 0x00000083   ; 2 MB huge page P+RW+PS
+    ; Identity-map the first 64 MB with 2 MB huge pages. The kernel's
+    ; BSS can extend beyond 2 MB before vmm_init() installs its own map.
+    xor ecx, ecx
+.map_pd:
+    mov eax, ecx
+    shl eax, 21
+    or  eax, 0x00000083                ; P+RW+PS
+    mov [pd_table + ecx * 8], eax
+    mov dword [pd_table + ecx * 8 + 4], 0
+    inc ecx
+    cmp ecx, 32
+    jl .map_pd
 
     ; Enable PAE
     mov eax, cr4

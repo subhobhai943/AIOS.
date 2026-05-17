@@ -25,7 +25,11 @@ INITRD  := boot/initrd.img
 # Sources
 C_SRCS  := $(shell find kernel -type f -name '*.c' \
            ! -path 'kernel/shell/*' \
-           ! -path 'kernel/gui/input_wiring.c')
+           ! -path 'kernel/llm/*' \
+           ! -path 'kernel/apps/notepad.c' \
+           ! -path 'kernel/apps/ai_chat.c' \
+           ! -path 'kernel/gui/input_wiring.c' \
+           ! -path 'kernel/keyboard_gui_hook.c')
 ASM_SRCS := $(shell find kernel -type f -name '*.asm')
 
 C_OBJS  := $(patsubst kernel/%.c,  $(BUILD)/%.o, $(C_SRCS))
@@ -68,11 +72,11 @@ iso: $(BUILD)/kernel.bin $(INITRD)
 
 # ── Run in QEMU ────────────────────────────────────────────
 run: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 512M -serial stdio
+	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -serial stdio
 
 # ── Debug in QEMU + GDB ────────────────────────────────────
 debug: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 512M -s -S &
+	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -s -S &
 	gdb -ex "target remote :1234" -ex "symbol-file $(BUILD)/kernel.bin"
 
 $(BUILD):

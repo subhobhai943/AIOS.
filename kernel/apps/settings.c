@@ -14,8 +14,8 @@
 #include "../gfx/font.h"
 #include "../gui/window.h"
 
-#define FONT_W 8
-#define FONT_H 16
+#define SETTINGS_FONT_W 8
+#define SETTINGS_FONT_H 16
 #define PADDING 6
 
 #define COL_BG     0xFF101010u
@@ -34,12 +34,12 @@ static void st_fill_rect(framebuffer_t *fb, int x, int y, int w, int h, uint32_t
     }
 }
 
-static void st_draw_label(framebuffer_t *fb, gui_font_t *font,
+static void st_draw_label(framebuffer_t *fb, const gui_font_t *font,
                           int x, int y, const char *s)
 {
     while (s && *s) {
-        font_draw_char(fb, font, x, y, *s, COL_LABEL, COL_BG);
-        x += FONT_W;
+        font_draw_char(fb, font, (uint32_t)x, (uint32_t)y, *s, COL_LABEL, COL_BG);
+        x += SETTINGS_FONT_W;
         s++;
     }
 }
@@ -49,7 +49,7 @@ static void settings_draw(gui_window_t *win, framebuffer_t *fb)
     (void)win;
     if (!fb) return;
 
-    gui_font_t *font = gui_get_default_font();
+    const gui_font_t *font = font_load_builtin();
 
     int x0 = win->x;
     int y0 = win->y;
@@ -60,13 +60,13 @@ static void settings_draw(gui_window_t *win, framebuffer_t *fb)
 
     int y = y0 + PADDING;
     st_draw_label(fb, font, x0 + PADDING, y, "Settings (placeholder)");
-    y += FONT_H * 2;
+    y += SETTINGS_FONT_H * 2;
     st_draw_label(fb, font, x0 + PADDING, y, "Future options:");
-    y += FONT_H;
+    y += SETTINGS_FONT_H;
     st_draw_label(fb, font, x0 + PADDING * 2, y, "- Display / theme");
-    y += FONT_H;
+    y += SETTINGS_FONT_H;
     st_draw_label(fb, font, x0 + PADDING * 2, y, "- Keyboard / input");
-    y += FONT_H;
+    y += SETTINGS_FONT_H;
     st_draw_label(fb, font, x0 + PADDING * 2, y, "- LLM parameters");
 }
 

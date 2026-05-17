@@ -13,7 +13,6 @@
 #include <stdbool.h>
 
 #include "terminal_gui.h"
-#include "../shell/terminal.h"
 #include "../heap.h"
 #include "../serial.h"
 #include "../gfx/framebuffer.h"
@@ -21,8 +20,8 @@
 #include "../gui/window.h"
 #include "../gui/input.h"
 
-#define FONT_W 8
-#define FONT_H 16
+#define TGUI_FONT_W 8
+#define TGUI_FONT_H 16
 #define PADDING 4
 
 /* Colour mapping: use simple white-on-black style; ignore per-cell
@@ -115,15 +114,22 @@ static void tgui_fill_rect(framebuffer_t *fb, int x, int y, int w, int h, uint32
     }
 }
 
-static void tgui_draw_char(framebuffer_t *fb, int x, int y, char c, uint32_t fg, uint32_t bg)
+static void tgui_draw_char(framebuffer_t *fb,
+                           const gui_font_t *font,
+                           int x,
+                           int y,
+                           char c,
+                           uint32_t fg,
+                           uint32_t bg)
 {
-    font_draw_char(fb, fb->width, x, y, c, fg, bg);
+    font_draw_char(fb, font, (uint32_t)x, (uint32_t)y, c, fg, bg);
 }
 
 static void tgui_draw(gui_window_t *win, framebuffer_t *fb)
 {
     terminal_gui_t *tg = (terminal_gui_t*)win->user_data;
     if (!tg || !fb) return;
+    const gui_font_t *font = font_load_builtin();
 
     tgui_fill_rect(fb, win->x, win->y, (int)win->width, (int)win->height, TGUI_COL_BG);
 
@@ -135,15 +141,17 @@ static void tgui_draw(gui_window_t *win, framebuffer_t *fb)
             char ch = tg->cells[r][c];
             uint32_t fg = TGUI_COL_FG;
             uint32_t bg = TGUI_COL_BG;
-            tgui_draw_char(fb, x0 + (int)c * FONT_W, y0 + (int)r * FONT_H,
+            tgui_draw_char(fb, font,
+                           x0 + (int)c * TGUI_FONT_W,
+                           y0 + (int)r * TGUI_FONT_H,
                            ch ? ch : ' ', fg, bg);
         }
     }
 
     /* Draw cursor as a block. */
-    int cx = x0 + (int)tg->cur_col * FONT_W;
-    int cy = y0 + (int)tg->cur_row * FONT_H;
-    tgui_fill_rect(fb, cx, cy + FONT_H - 2, FONT_W, 2, TGUI_COL_CUR);
+    int cx = x0 + (int)tg->cur_col * TGUI_FONT_W;
+    int cy = y0 + (int)tg->cur_row * TGUI_FONT_H;
+    tgui_fill_rect(fb, cx, cy + TGUI_FONT_H - 2, TGUI_FONT_W, 2, TGUI_COL_CUR);
 }
 
 /* --- Event handling ------------------------------------------------- */
@@ -155,10 +163,13 @@ static void tgui_handle_event(gui_window_t *win, const gui_event_t *ev)
 
     if (ev->type == GUI_EVENT_KEY_DOWN) {
         uint8_t key = ev->keycode;
-        /* For now we assume keycode is ASCII for printables and
-         * matches TERM_KEY_* for special keys.
-         */
-        terminal_feed(key);
+        if (key == '\r' || key == '\n' || key == 0x1Cu) {
+            terminal_gui_write("\nAIOS> ");
+        } else if (key == '\b' || key == 0x0Eu) {
+            terminal_gui_write_char('\b');
+        } else if (key >= 0x20u && key < 0x7Fu) {
+            terminal_gui_write_char((char)key);
+        }
     }
 }
 
@@ -183,8 +194,8 @@ terminal_gui_t *terminal_gui_open(void)
         }
     }
 
-    uint32_t w = (uint32_t)(TGUI_COLS * FONT_W + PADDING * 2);
-    uint32_t h = (uint32_t)(TGUI_ROWS * FONT_H + PADDING * 2);
+    uint32_t w = (uint32_t)(TGUI_COLS * TGUI_FONT_W + PADDING * 2);
+    uint32_t h = (uint32_t)(TGUI_ROWS * TGUI_FONT_H + PADDING * 2);
 
     gui_window_t *win = gui_create_window(40, 40, w, h,
                                           "Terminal",
@@ -198,8 +209,9 @@ terminal_gui_t *terminal_gui_open(void)
 
     tg->win_id = win->id;
     g_tgui = tg;
+    terminal_gui_write("AIOS GUI terminal\nAIOS> ");
 
-    serial_puts("[terminal_gui] opened\r\n");
+    serial_puts(SERIAL_COM1, "[terminal_gui] opened\r\n");
     return tg;
 }
 

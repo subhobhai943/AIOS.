@@ -1,4 +1,5 @@
 #include "framebuffer.h"
+#include "include/vmm.h"
 #include "serial.h"
 
 #ifndef PHYS_TO_VIRT
@@ -8,6 +9,7 @@
 /* Multiboot2 framebuffer tag type */
 #define MB2_TAG_TYPE_END        0
 #define MB2_TAG_TYPE_FRAMEBUFFER 8
+#define FB_PAGE_SIZE            4096u
 
 typedef struct __attribute__((packed)) {
     uint32_t total_size;
@@ -55,7 +57,13 @@ bool fb_init_from_multiboot(uint64_t mb2_phys) {
             g_fb.pitch  = fb->fb_pitch;
             g_fb.bpp    = fb->fb_bpp;
             g_fb.type   = fb->fb_type;
-            g_fb.addr   = (uint8_t *)PHYS_TO_VIRT(fb->fb_addr);
+            uint64_t phys = fb->fb_addr;
+            uint64_t page_base = phys & ~(uint64_t)(FB_PAGE_SIZE - 1u);
+            uint64_t page_off = phys - page_base;
+            uint64_t bytes = (uint64_t)fb->fb_pitch * (uint64_t)fb->fb_height;
+            size_t pages = (size_t)((page_off + bytes + FB_PAGE_SIZE - 1u) / FB_PAGE_SIZE);
+            vmm_map_mmio(page_base, pages);
+            g_fb.addr = (uint8_t *)PHYS_TO_VIRT(phys);
 
             serial_puts(SERIAL_COM1, "[fb] framebuffer tag found\n");
             return true;

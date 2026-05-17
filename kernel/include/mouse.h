@@ -23,7 +23,10 @@
 typedef struct {
     int16_t dx;        /* signed X delta              */
     int16_t dy;        /* signed Y delta (Y-inverted) */
+    int32_t abs_x;     /* absolute X position         */
+    int32_t abs_y;     /* absolute Y position         */
     uint8_t buttons;   /* button bitmask              */
+    uint8_t prev_buttons;
 } mouse_event_t;
 
 void mouse_init(void);

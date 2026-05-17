@@ -29,6 +29,20 @@ check() {
     fi
 }
 
+check_optional() {
+    local name="$1"
+    local cmd="$2"
+    local hint="$3"
+
+    if command -v "$cmd" &>/dev/null; then
+        local ver
+        ver=$("$cmd" --version 2>&1 | head -n1)
+        printf "  ${GREEN}[OK]${NC}  %-28s %s\n" "$name" "$ver"
+    else
+        printf "  ${YELLOW}[OPTIONAL]${NC} %-21s ${YELLOW}$hint${NC}\n" "$name"
+    fi
+}
+
 echo
 echo "AIOS Build Dependency Check"
 echo "============================="
@@ -52,7 +66,7 @@ check "grub-mkrescue"  "grub-mkrescue"  \
 check "xorriso"        "xorriso"        \
     "ISO creation tool used by grub-mkrescue: sudo apt install xorriso / brew install xorriso"
 
-check "gdb"            "gdb"            \
+check_optional "gdb"   "gdb"            \
     "GNU Debugger (optional but recommended): sudo apt install gdb"
 
 check "make"           "make"           \

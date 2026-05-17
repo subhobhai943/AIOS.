@@ -59,6 +59,7 @@ case "$ACTION" in
         qemu-system-x86_64 \
             -cdrom aios.iso \
             -m 512M \
+            -vga std \
             -serial stdio \
             -no-reboot \
             -no-shutdown
@@ -70,6 +71,7 @@ case "$ACTION" in
         qemu-system-x86_64 \
             -cdrom aios.iso \
             -m 512M \
+            -vga std \
             -s -S \
             -no-reboot \
             -no-shutdown &

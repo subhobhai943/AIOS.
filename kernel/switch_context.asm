@@ -19,6 +19,8 @@
 
 section .text
 global switch_context
+global task_entry_trampoline
+extern sched_exit
 
 switch_context:
     ; ---- Save current task's callee-saved regs onto current stack ----
@@ -46,3 +48,14 @@ switch_context:
     ; ---- Return to next task (ret pops the "return address" we pushed
     ;      in task_create, or the real return address if resuming)  ----
     ret
+
+task_entry_trampoline:
+    ; First-run tasks are reached from scheduler code that had disabled
+    ; interrupts. Re-enable them before executing normal kernel-thread code.
+    sti
+    pop     rax         ; task entry pointer placed by task_create()
+    call    rax
+    call    sched_exit
+.hang:
+    hlt
+    jmp     .hang

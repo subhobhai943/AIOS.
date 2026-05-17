@@ -53,8 +53,8 @@ static int ex_strcmp(const char *a, const char *b) {
     return 0;
 }
 
-#define FONT_W 8
-#define FONT_H 16
+#define EXPL_FONT_W 8
+#define EXPL_FONT_H 16
 #define PADDING 4
 #define HEADER_H 20
 #define ROW_H   18
@@ -85,10 +85,10 @@ static int ex_draw_string(framebuffer_t *fb, const gui_font_t *font,
                           int x, int y, const char *s,
                           uint32_t fg, uint32_t bg)
 {
-    (void)font; /* currently a single global builtin font */
+    if (!font) font = font_load_builtin();
     while (*s) {
-        font_draw_char(fb, fb->width, x, y, *s, fg, bg);
-        x += FONT_W;
+        font_draw_char(fb, font, (uint32_t)x, (uint32_t)y, *s, fg, bg);
+        x += EXPL_FONT_W;
         s++;
     }
     return x;
@@ -235,6 +235,7 @@ static void explorer_draw_cb(gui_window_t *win, framebuffer_t *fb)
 {
     explorer_t *exp = (explorer_t *)win->user_data;
     if (!exp || !fb) return;
+    const gui_font_t *font = font_load_builtin();
 
     /* Background */
     ex_fill_rect(fb, win->x, win->y, (int)win->width, (int)win->height,
@@ -246,7 +247,7 @@ static void explorer_draw_cb(gui_window_t *win, framebuffer_t *fb)
     /* Header bar (current path) */
     ex_fill_rect(fb, x0, y0, (int)win->width - PADDING*2, HEADER_H,
                  EXPL_COL_HEADER_BG);
-    ex_draw_string(fb, 0, x0 + 4, y0 + 2, exp->cwd,
+    ex_draw_string(fb, font, x0 + 4, y0 + 2, exp->cwd,
                    EXPL_COL_HEADER_FG, EXPL_COL_HEADER_BG);
 
     int list_y = y0 + HEADER_H + PADDING;
@@ -280,7 +281,7 @@ static void explorer_draw_cb(gui_window_t *win, framebuffer_t *fb)
             ex_strcpy(namebuf, e->name);
         }
 
-        ex_draw_string(fb, 0, x0 + 4, row_y, namebuf, fg, bg);
+        ex_draw_string(fb, font, x0 + 4, row_y, namebuf, fg, bg);
 
         row_y += ROW_H;
     }
@@ -313,7 +314,6 @@ static void explorer_event_cb(gui_window_t *win, const gui_event_t *ev)
     if (ev->type == GUI_EVENT_MOUSE_DOWN &&
         (ev->buttons & GUI_MOUSE_BUTTON_LEFT)) {
         /* Hit-test rows */
-        int x0 = win->x + PADDING;
         int list_y = win->y + PADDING + HEADER_H + PADDING;
 
         if (ev->y >= list_y) {
@@ -362,7 +362,7 @@ explorer_t *explorer_open(const char *start_path)
 
     exp->win_id = win->id;
 
-    serial_puts("[explorer] opened\r\n");
+    serial_puts(SERIAL_COM1, "[explorer] opened\r\n");
     return exp;
 }
 
