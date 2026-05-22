@@ -73,6 +73,15 @@ static inline float rng_float(uint64_t *state) {
     return (float)(xorshift64(state) >> 11) * (1.0f / (float)(1ULL << 53));
 }
 
+/* Helper to initialise a 1-D tensor view over `data` of length `len`. */
+static inline void tensor_view_1d(tensor_t *t, float *data, int32_t len) {
+    t->data  = data;
+    t->ndim  = 1;
+    t->dims[0] = len;
+    t->dims[1] = t->dims[2] = t->dims[3] = 0;
+    t->numel = (size_t)len;
+}
+
 /* ─────────────────────────────────────────────────────────────
  * model_alloc
  * ───────────────────────────────────────────────────────────── */
@@ -81,13 +90,11 @@ aios_model_t *model_alloc(const model_config_t *cfg)
     if (!cfg) return (void*)0;
 
     if (cfg->n_embd > MAX_EMBD) {
-        klog("[model] n_embd %u exceeds MAX_EMBD %u\n",
-             cfg->n_embd, (uint32_t)MAX_EMBD);
+        klog("[model] n_embd exceeds MAX_EMBD\n");
         return (void*)0;
     }
     if (cfg->n_layers > MAX_LAYERS) {
-        klog("[model] n_layers %u exceeds MAX_LAYERS %u\n",
-             cfg->n_layers, (uint32_t)MAX_LAYERS);
+        klog("[model] n_layers exceeds MAX_LAYERS\n");
         return (void*)0;
     }
 
@@ -126,8 +133,7 @@ aios_model_t *model_alloc(const model_config_t *cfg)
         return (void*)0;
     }
 
-    klog("[model] alloc ok: arch=%d layers=%u embd=%u vocab=%u\n",
-         (int)cfg->arch, cfg->n_layers, cfg->n_embd, cfg->vocab_size);
+    klog("[model] alloc ok\n");
     return m;
 }
 
@@ -172,74 +178,77 @@ int model_forward(aios_model_t        *m,
     const uint32_t D = cfg->n_embd;
     if (D > MAX_EMBD) return -1;
 
-    /* ── static scratch: two hidden-state vectors ───────────────── */
+    /* ── static scratch: two hidden-state vectors ───────────── */
     static float x[MAX_EMBD];
     static float y[MAX_EMBD];
 
-    /* ───────────────────────────────────────────────────────────
+    /* Build attention config for transformer blocks */
+    attn_config_t ac;
+    ac.n_heads     = cfg->n_heads;
+    ac.n_kv_heads  = cfg->n_kv_heads;
+    ac.n_embd      = cfg->n_embd;
+    ac.max_seq_len = cfg->max_seq_len;
+    ac.n_layers    = cfg->n_layers;
+
+    /* ─────────────────────────────────────────────────────────
      * Step 1: Token embedding
      * wte layout: [vocab_size, n_embd] row-major
      * x = wte[token_id, :]
-     * ─────────────────────────────────────────────────────────── */
+     * ───────────────────────────────────────────────────────── */
     {
         const float *row = m->wte.data + (size_t)token_id * D;
         model_memcpy_f(x, row, D);
     }
 
-    /* ───────────────────────────────────────────────────────────
+    /* ─────────────────────────────────────────────────────────
      * Step 2: Positional embedding (GPT-2 only)
      * LLaMA bakes position into RoPE inside the attention layer;
      * the wpe tensor is left empty (data == NULL) for LLaMA models.
      * x += wpe[pos, :]
-     * ─────────────────────────────────────────────────────────── */
+     * ───────────────────────────────────────────────────────── */
     if (cfg->arch == MODEL_ARCH_GPT2 && m->wpe.data) {
         const float *pe = m->wpe.data + (size_t)pos * D;
         for (uint32_t i = 0; i < D; i++) x[i] += pe[i];
     }
 
-    /* ───────────────────────────────────────────────────────────
+    /* ─────────────────────────────────────────────────────────
      * Step 3: Transformer blocks
-     * transformer_block_forward(block, cfg_ptr, x_in, pos, kvc, layer, x_out)
+     * transformer_block_forward(block, &ac, x, y, kvc, layer, pos)
      * We pass the current hidden state x and receive updated state y,
-     * then swap pointers for the next layer.
-     * ─────────────────────────────────────────────────────────── */
+     * then swap buffers for the next layer.
+     * ───────────────────────────────────────────────────────── */
     for (uint32_t l = 0; l < cfg->n_layers; l++) {
-        transformer_block_forward(&m->blocks[l], cfg, x, pos, m->kvc, l, y);
+        transformer_block_forward(&m->blocks[l], &ac, x, y, m->kvc,
+                                  (int32_t)l, (int32_t)pos);
         model_memcpy_f(x, y, D);
     }
 
-    /* ───────────────────────────────────────────────────────────
+    /* ─────────────────────────────────────────────────────────
      * Step 4: Final layer norm
-     * ops_layernorm / ops_rmsnorm depending on architecture.
-     * Result overwrites x in-place (the ops functions accept
-     * src == dst for in-place operation).
-     * ─────────────────────────────────────────────────────────── */
+     * ops_layer_norm / ops_rms_norm depending on architecture.
+     * Result overwrites x in-place.
+     * ───────────────────────────────────────────────────────── */
     {
-        /* Build tensor views pointing at stack buffers and weight rows */
         tensor_t tx, tw, tb, tout;
-        tx.data  = x;              tx.n = D;
-        tw.data  = m->ln_f_w.data; tw.n = D;
-        tout.data = x;             tout.n = D;
+        tensor_view_1d(&tx,   x,              (int32_t)D);
+        tensor_view_1d(&tw,   m->ln_f_w.data, (int32_t)D);
+        tensor_view_1d(&tout, x,              (int32_t)D);
 
         if (cfg->arch == MODEL_ARCH_LLAMA) {
             /* RMSNorm — bias is ignored (b is NULL/zero for LLaMA) */
-            ops_rmsnorm(&tx, &tw, cfg->layer_norm_eps, &tout);
+            ops_rms_norm(&tx, &tw, &tout, cfg->layer_norm_eps);
         } else {
-            /* LayerNorm with bias */
-            tb.data  = m->ln_f_b.data; tb.n = D;
-            ops_layernorm(&tx, &tw, &tb, cfg->layer_norm_eps, &tout);
+            tensor_view_1d(&tb, m->ln_f_b.data, (int32_t)D);
+            ops_layer_norm(&tx, &tw, &tb, &tout, cfg->layer_norm_eps);
         }
     }
 
-    /* ───────────────────────────────────────────────────────────
+    /* ─────────────────────────────────────────────────────────
      * Step 5: LM-head projection
      * logits = lm_head @ x
      * lm_head layout: [vocab_size, n_embd] row-major
      * logits_out[v] = dot(lm_head[v,:], x)
-     *
-     * Uses the SIMD-accelerated ops_matmul_vec from ops.c which
-     * calls the AVX2 kernel when available.
-     * ─────────────────────────────────────────────────────────── */
+     * ───────────────────────────────────────────────────────── */
     {
         const float *W = m->lm_head.data;
         for (uint32_t v = 0; v < cfg->vocab_size; v++) {
@@ -251,7 +260,7 @@ int model_forward(aios_model_t        *m,
     }
 
     /* Advance KV-cache position counter */
-    m->kvc->cur_len++;
+    if (m->kvc) m->kvc->cur_len++;
 
     return 0;
 }
@@ -314,9 +323,6 @@ uint32_t model_sample(const float          *logits,
     }
 
     /* ── Temperature scaling + softmax ────────────────────────── */
-    /* We work with a stack-allocated scratch array of max 128 entries
-     * for top-k.  Full vocab softmax uses logits in-place via a
-     * static buffer to avoid heap allocation.                        */
     static float probs[131072]; /* 128k tokens max — adjust if needed */
     uint32_t     n = vocab_size < 131072 ? vocab_size : 131072;
 
@@ -356,8 +362,6 @@ uint32_t model_sample(const float          *logits,
 
     /* ── Top-p / nucleus filter ─────────────────────────────── */
     if (scfg->top_p > 0.0f && scfg->top_p < 1.0f) {
-        /* We need a sorted view. Re-use topk_idx as scratch for the
-         * full vocab sort (insertion sort — O(n^2) but vocab ≤50k). */
         uint32_t lim = n < 128 ? n : 128;
         topk_sort(probs, n, topk_idx, lim);
         float cumsum = 0.0f;
@@ -368,7 +372,6 @@ uint32_t model_sample(const float          *logits,
             cumsum += probs[v];
             if (cumsum >= scfg->top_p) below = false;
         }
-        /* zero tokens not reached */
         float thresh = 0.0f;
         cumsum = 0.0f;
         for (uint32_t i = 0; i < lim; i++) {
@@ -379,7 +382,6 @@ uint32_t model_sample(const float          *logits,
         }
         for (uint32_t v = 0; v < n; v++)
             if (probs[v] < thresh) probs[v] = 0.0f;
-        /* renormalise */
         sum = 0.0f;
         for (uint32_t v = 0; v < n; v++) sum += probs[v];
         if (sum > 0.0f) { inv_sum = 1.0f / sum;
@@ -396,7 +398,6 @@ uint32_t model_sample(const float          *logits,
         cdf += probs[v];
         if (u <= cdf) return v;
     }
-    /* fallback: return last non-zero token */
     for (int32_t v = (int32_t)n - 1; v >= 0; v--)
         if (probs[v] > 0.0f) return (uint32_t)v;
     return 0;
