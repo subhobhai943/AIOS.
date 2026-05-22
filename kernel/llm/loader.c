@@ -297,27 +297,27 @@ static size_t ggml_n_elem(ggml_type_t t, size_t raw_bytes) {
  *   output_norm.weight         → ln_f_w
  *   output_norm.bias           → ln_f_b
  *   output.weight              → lm_head
- *   blk.N.attn_norm.weight     → blocks[N].ln1_w
- *   blk.N.attn_norm.bias       → blocks[N].ln1_b
- *   blk.N.attn_q.weight        → blocks[N].Wq
- *   blk.N.attn_k.weight        → blocks[N].Wk
- *   blk.N.attn_v.weight        → blocks[N].Wv
- *   blk.N.attn_output.weight   → blocks[N].Wo
- *   blk.N.ffn_norm.weight      → blocks[N].ln2_w
- *   blk.N.ffn_norm.bias        → blocks[N].ln2_b
- *   blk.N.ffn_gate.weight      → blocks[N].W1  (SwiGLU gate)
- *   blk.N.ffn_up.weight        → blocks[N].W2  (SwiGLU up / GELU)
- *   blk.N.ffn_down.weight      → blocks[N].W3  (projection)
+ *   blk.N.attn_norm.weight     → blocks[N].norm1_gamma
+ *   blk.N.attn_norm.bias       → blocks[N].norm1_beta
+ *   blk.N.attn_q.weight        → blocks[N].wq
+ *   blk.N.attn_k.weight        → blocks[N].wk
+ *   blk.N.attn_v.weight        → blocks[N].wv
+ *   blk.N.attn_output.weight   → blocks[N].wo
+ *   blk.N.ffn_norm.weight      → blocks[N].norm2_gamma
+ *   blk.N.ffn_norm.bias        → blocks[N].norm2_beta
+ *   blk.N.ffn_gate.weight      → blocks[N].w1  (SwiGLU gate)
+ *   blk.N.ffn_up.weight        → blocks[N].w2  (SwiGLU up / GELU)
+ *   blk.N.ffn_down.weight      → blocks[N].w_gate  (projection or extra gate)
  */
-static tensor_t *find_tensor(aios_model_t *m, const model_config_t *cfg,
-                              const char *name, size_t name_len)
+static float **find_tensor_slot(aios_model_t *m, const model_config_t *cfg,
+                                const char *name, size_t name_len)
 {
     /* Global tensors */
-    if (ldr_strncmp(name, "token_embd.weight",    17) == 0) return &m->wte;
-    if (ldr_strncmp(name, "position_embd.weight", 20) == 0) return &m->wpe;
-    if (ldr_strncmp(name, "output_norm.weight",   18) == 0) return &m->ln_f_w;
-    if (ldr_strncmp(name, "output_norm.bias",     16) == 0) return &m->ln_f_b;
-    if (ldr_strncmp(name, "output.weight",        13) == 0) return &m->lm_head;
+    if (ldr_strncmp(name, "token_embd.weight",    17) == 0) return &m->wte.data;
+    if (ldr_strncmp(name, "position_embd.weight", 20) == 0) return &m->wpe.data;
+    if (ldr_strncmp(name, "output_norm.weight",   18) == 0) return &m->ln_f_w.data;
+    if (ldr_strncmp(name, "output_norm.bias",     16) == 0) return &m->ln_f_b.data;
+    if (ldr_strncmp(name, "output.weight",        13) == 0) return &m->lm_head.data;
 
     /* Block tensors: "blk.N.xxx" */
     if (name_len < 5) return (void*)0;
@@ -336,17 +336,17 @@ static tensor_t *find_tensor(aios_model_t *m, const model_config_t *cfg,
     const char *sub = name + i;
     transformer_block_t *blk = &m->blocks[layer];
 
-    if (ldr_strncmp(sub, "attn_norm.weight",   16) == 0) return &blk->ln1_w;
-    if (ldr_strncmp(sub, "attn_norm.bias",     14) == 0) return &blk->ln1_b;
-    if (ldr_strncmp(sub, "attn_q.weight",      13) == 0) return &blk->Wq;
-    if (ldr_strncmp(sub, "attn_k.weight",      13) == 0) return &blk->Wk;
-    if (ldr_strncmp(sub, "attn_v.weight",      13) == 0) return &blk->Wv;
-    if (ldr_strncmp(sub, "attn_output.weight", 18) == 0) return &blk->Wo;
-    if (ldr_strncmp(sub, "ffn_norm.weight",    15) == 0) return &blk->ln2_w;
-    if (ldr_strncmp(sub, "ffn_norm.bias",      13) == 0) return &blk->ln2_b;
-    if (ldr_strncmp(sub, "ffn_gate.weight",    15) == 0) return &blk->W1;
-    if (ldr_strncmp(sub, "ffn_up.weight",      13) == 0) return &blk->W2;
-    if (ldr_strncmp(sub, "ffn_down.weight",    15) == 0) return &blk->W3;
+    if (ldr_strncmp(sub, "attn_norm.weight",   16) == 0) return (float **)&blk->norm1_gamma;
+    if (ldr_strncmp(sub, "attn_norm.bias",     14) == 0) return (float **)&blk->norm1_beta;
+    if (ldr_strncmp(sub, "attn_q.weight",      13) == 0) return (float **)&blk->wq;
+    if (ldr_strncmp(sub, "attn_k.weight",      13) == 0) return (float **)&blk->wk;
+    if (ldr_strncmp(sub, "attn_v.weight",      13) == 0) return (float **)&blk->wv;
+    if (ldr_strncmp(sub, "attn_output.weight", 18) == 0) return (float **)&blk->wo;
+    if (ldr_strncmp(sub, "ffn_norm.weight",    15) == 0) return (float **)&blk->norm2_gamma;
+    if (ldr_strncmp(sub, "ffn_norm.bias",      13) == 0) return (float **)&blk->norm2_beta;
+    if (ldr_strncmp(sub, "ffn_gate.weight",    15) == 0) return (float **)&blk->w1;
+    if (ldr_strncmp(sub, "ffn_up.weight",      13) == 0) return (float **)&blk->w2;
+    if (ldr_strncmp(sub, "ffn_down.weight",    15) == 0) return (float **)&blk->w_gate;
 
     (void)name_len;
     return (void*)0;  /* unknown tensor — skip */
@@ -366,7 +366,7 @@ loader_err_t loader_load(const char          *vfs_path,
     /* ── 1. Open file ───────────────────────────────────────── */
     int fd = vfs_open(vfs_path);
     if (fd < 0) {
-        klog("[loader] vfs_open failed: %s\n", vfs_path);
+        klog("[loader] vfs_open failed\n");
         return LOADER_ERR_NOT_FOUND;
     }
 
@@ -390,7 +390,7 @@ loader_err_t loader_load(const char          *vfs_path,
     if (nread != (int32_t)ctx->raw_bytes) {
         kfree(ctx->raw_blob); kfree(ctx); return LOADER_ERR_IO;
     }
-    klog("[loader] read %zu bytes from %s\n", ctx->raw_bytes, vfs_path);
+    klog("[loader] read GGUF file\n");
 
     /* ── 3. Parse GGUF header ─────────────────────────────────── */
     cursor_t cur;
@@ -404,7 +404,7 @@ loader_err_t loader_load(const char          *vfs_path,
 
     uint32_t version = cur_u32(&cur);
     if (version < GGUF_VER_MIN || version > GGUF_VER_MAX) {
-        klog("[loader] unsupported GGUF version %u\n", version);
+        klog("[loader] unsupported GGUF version\n");
         goto bad_ver;
     }
     ctx->gguf_version = version;
@@ -412,9 +412,6 @@ loader_err_t loader_load(const char          *vfs_path,
     uint64_t n_tensors = cur_u64(&cur);
     uint64_t n_kv      = cur_u64(&cur);
     ctx->n_tensors = (uint32_t)n_tensors;
-    klog("[loader] GGUF v%u: %llu tensors, %llu kv\n",
-         version, (unsigned long long)n_tensors,
-         (unsigned long long)n_kv);
 
     /* ── 4. Skip metadata KV pairs ───────────────────────────── */
     for (uint64_t k = 0; k < n_kv; k++) {
@@ -491,8 +488,6 @@ loader_err_t loader_load(const char          *vfs_path,
         case GGML_TYPE_Q4_K:
             ti->raw_bytes = (ne / Q4K_BLOCK_SIZE) * Q4K_BYTES_PER_BLK; break;
         default:
-            klog("[loader] unsupported tensor type %u for '%s'\n",
-                 ti->type, ti->name);
             ti->raw_bytes = 0; break;  /* skip on deq pass */
         }
 
@@ -511,13 +506,12 @@ loader_err_t loader_load(const char          *vfs_path,
     if (!ctx->float_arena) {
         kfree(tinfos); goto oom;
     }
-    klog("[loader] float arena: %zu MiB\n", ctx->arena_bytes >> 20);
 
     /* ── 8. Allocate model struct ──────────────────────────────── */
     aios_model_t *m = model_alloc(cfg);
     if (!m) { kfree(tinfos); goto oom; }
 
-    /* ── 9. Dequantise each tensor into arena, assign tensor_t views ─ */
+    /* ── 9. Dequantise each tensor into arena, assign tensor views ─ */
     float *arena_ptr = ctx->float_arena;
 
     for (uint32_t t = 0; t < ctx->n_tensors && t < MAX_TENSORS; t++) {
@@ -528,7 +522,6 @@ loader_err_t loader_load(const char          *vfs_path,
 
         /* bounds check */
         if (data_section_start + ti->raw_offset + ti->raw_bytes > ctx->raw_bytes) {
-            klog("[loader] tensor '%s' out of bounds\n", ti->name);
             continue;
         }
 
@@ -550,15 +543,10 @@ loader_err_t loader_load(const char          *vfs_path,
         default: continue;
         }
 
-        /* Find the tensor slot in the model and assign the view */
-        tensor_t *slot = find_tensor(m, cfg, ti->name, ti->name_len);
-        if (slot) {
-            slot->data = dst;
-            slot->n    = (size_t)ti->n_elem;
-            klog("[loader] loaded tensor '%s' (%llu elem)\n",
-                 ti->name, (unsigned long long)ti->n_elem);
-        } else {
-            klog("[loader] skipping unknown tensor '%s'\n", ti->name);
+        /* Find the tensor slot in the model and assign the pointer */
+        float **slot_ptr = find_tensor_slot(m, cfg, ti->name, ti->name_len);
+        if (slot_ptr) {
+            *slot_ptr = dst;
         }
 
         arena_ptr += (size_t)ti->n_elem;
@@ -567,13 +555,11 @@ loader_err_t loader_load(const char          *vfs_path,
     /* Tie lm_head to wte if configured */
     if (cfg->tie_weights && m->wte.data && !m->lm_head.data) {
         m->lm_head = m->wte;
-        klog("[loader] lm_head tied to wte\n");
     }
 
     kfree(tinfos);
     *model_out = m;
     *ctx_out   = ctx;
-    klog("[loader] load complete\n");
     return LOADER_OK;
 
     /* ── error labels ────────────────────────────────────────── */
