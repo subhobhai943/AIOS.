@@ -80,6 +80,39 @@ static inline bool buf_append(char *buf, size_t *pos, size_t cap,
 }
 
 /* ─────────────────────────────────────────────────────────────────────
+ * Minimal freestanding snprintf for klog formatting
+ * ───────────────────────────────────────────────────────────────────── */
+static void tok_u32_to_str(char *buf, size_t bufsz, uint32_t val) {
+    if (bufsz == 0) return;
+    if (val == 0) { buf[0] = '0'; buf[1] = '\0'; return; }
+    char tmp[12]; int i = 0;
+    while (val > 0 && i < 11) { tmp[i++] = (char)('0' + val % 10); val /= 10; }
+    int j = 0;
+    while (i > 0 && (size_t)j < bufsz - 1) buf[j++] = tmp[--i];
+    buf[j] = '\0';
+}
+
+static size_t tok_klog_fmt(char *out, size_t outsz,
+                            const char *fmt, uint32_t a, uint32_t b)
+{
+    size_t pos = 0;
+    int arg = 0;
+    for (const char *p = fmt; *p && pos + 1 < outsz; p++) {
+        if (p[0] == '%' && p[1] == 'u') {
+            char num[12];
+            tok_u32_to_str(num, sizeof(num), arg == 0 ? a : b);
+            for (int k = 0; num[k] && pos + 1 < outsz; k++)
+                out[pos++] = num[k];
+            p++; arg++;
+        } else {
+            out[pos++] = *p;
+        }
+    }
+    out[pos] = '\0';
+    return pos;
+}
+
+/* ─────────────────────────────────────────────────────────────────────
  * UTF-8 utilities
  * ───────────────────────────────────────────────────────────────────── */
 
@@ -251,7 +284,13 @@ tok_err_t tokenizer_build(tokenizer_t        *tok,
     }
     tok->merge_index = (uint32_t **)ht;  /* type-punned storage */
 
-    klog("[tokenizer] built: vocab=%u merges=%u\n", vocab_size, n_merges);
+    {
+        char _klog_buf[128];
+        tok_klog_fmt(_klog_buf, sizeof(_klog_buf),
+                     "[tokenizer] built: vocab=%u merges=%u\n",
+                     vocab_size, n_merges);
+        klog(_klog_buf);
+    }
     return TOK_OK;
 }
 

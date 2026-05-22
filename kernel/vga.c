@@ -10,8 +10,6 @@
 #include <stddef.h>
 
 /* ── Hardware constants ──────────────────────────────────── */
-#define VGA_WIDTH    80
-#define VGA_HEIGHT   25
 #define VGA_MEMORY   ((volatile uint16_t *)0xB8000)
 
 #define VGA_REG_CTRL  0x3D4

@@ -4,10 +4,6 @@
 
 #include <stdint.h>
 
-#define MOUSE_STATUS_OBF 0x01u
-#define MOUSE_STATUS_IBF 0x02u
-#define MOUSE_STATUS_AUX 0x20u
-
 #define MOUSE_CMD_ENABLE_AUX 0xA8u
 #define MOUSE_CMD_WRITE_NEXT 0xD4u
 #define MOUSE_DEV_ENABLE     0xF4u
