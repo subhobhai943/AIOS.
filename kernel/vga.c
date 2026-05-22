@@ -35,8 +35,10 @@ static inline uint8_t inb(uint16_t port) {
 static inline uint16_t vga_entry(unsigned char c, uint8_t col_attr) {
     return (uint16_t)c | ((uint16_t)col_attr << 8);
 }
-static inline uint8_t vga_color(vga_color_t fg, vga_color_t bg) {
-    return (uint8_t)fg | ((uint8_t)bg << 4);
+
+/* Colour packing helper: takes raw 0–15 colour indices as in vga.h */
+static inline uint8_t vga_color(uint8_t fg, uint8_t bg) {
+    return (uint8_t)(fg & 0x0F) | (uint8_t)((bg & 0x0F) << 4);
 }
 
 /* ── Hardware cursor ─────────────────────────────────────── */
@@ -87,7 +89,7 @@ void vga_clear(void) {
 }
 
 /* ── vga_set_color ───────────────────────────────────────── */
-void vga_set_color(vga_color_t fg, vga_color_t bg) {
+void vga_set_color(uint8_t fg, uint8_t bg) {
     color = vga_color(fg, bg);
 }
 
@@ -129,7 +131,7 @@ void vga_puts(const char *s) {
 }
 
 /* ── vga_puts_color ──────────────────────────────────────── */
-void vga_puts_color(const char *s, vga_color_t fg, vga_color_t bg) {
+void vga_puts_color(const char *s, uint8_t fg, uint8_t bg) {
     uint8_t saved = color;
     color = vga_color(fg, bg);
     while (*s) vga_putchar(*s++);
