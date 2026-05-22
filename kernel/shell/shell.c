@@ -4,7 +4,8 @@
  *   help, clear, echo, mem, ps, ls, cat, hexdump,
  *   reboot, shutdown, startx / gui
  *
- * Launched as a kthread: task_create(shell_run, 65536, "shell")
+ * Launched as a kthread: task_create(shell_entry, 65536, "shell")
+ * shell_entry() is a trampoline in kernel_main.c that calls shell_run(NULL).
  * No libc. No standard I/O.
  */
 
@@ -74,7 +75,7 @@ static void cmd_help(int argc, char **argv)
     sh_puts("  echo [args]   print arguments\n");
     sh_puts("  mem           show memory statistics\n");
     sh_puts("  ps            list kernel tasks\n");
-    sh_puts("  ls [path]     list known VFS paths\n");
+    sh_puts("  ls            list known VFS paths\n");
     sh_puts("  cat FILE      print file contents\n");
     sh_puts("  hexdump FILE  hex dump first 256 bytes of file\n");
     sh_puts("  reboot        reboot the machine\n");
@@ -109,7 +110,6 @@ static void cmd_mem(int argc, char **argv)
     sh_puts("  Free  : "); sh_putdec(free);  sh_puts(" pages ("); sh_putdec(free  * 4); sh_puts(" KiB)\n");
 }
 
-/* callback for task_foreach */
 static void ps_print_one(task_t *t, void *ctx)
 {
     (void)ctx;
@@ -135,10 +135,6 @@ static void cmd_ps(int argc, char **argv)
     task_foreach(ps_print_one, 0);
 }
 
-/*
- * cmd_ls — VFS has no directory-listing API (read-only FAT32, no readdir).
- * Instead, probe a set of well-known paths and report which exist.
- */
 static const char *g_known_paths[] = {
     "/TEST.TXT",
     "/tokenizer/vocab.bin",
@@ -155,16 +151,13 @@ static void cmd_ls(int argc, char **argv)
     vga_puts_color("VFS known files:\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     for (int i = 0; g_known_paths[i]; i++) {
         vfs_stat_t st;
-        int r = vfs_stat(g_known_paths[i], &st);
-        if (r == 0) {
+        if (vfs_stat(g_known_paths[i], &st) == 0) {
             sh_puts("  [FILE] ");
             sh_puts(g_known_paths[i]);
-            sh_puts("  (");
-            sh_putdec((uint64_t)st.size);
-            sh_puts(" B)\n");
+            sh_puts("  ("); sh_putdec((uint64_t)st.size); sh_puts(" B)\n");
         }
     }
-    sh_puts("  (VFS has no readdir; use 'cat' to read a file)\n");
+    sh_puts("  (use 'cat FILE' to read a file)\n");
 }
 
 static void cmd_cat(int argc, char **argv)
@@ -174,9 +167,8 @@ static void cmd_cat(int argc, char **argv)
     if (fd < 0) { sh_puts("cat: cannot open '"); sh_puts(argv[1]); sh_puts("'\n"); return; }
     static uint8_t buf[256];
     int got;
-    while ((got = vfs_read(fd, buf, sizeof(buf))) > 0) {
+    while ((got = vfs_read(fd, buf, sizeof(buf))) > 0)
         for (int i = 0; i < got; i++) vga_putchar((char)buf[i]);
-    }
     vga_putchar('\n');
     vfs_close(fd);
 }
@@ -284,6 +276,11 @@ int shell_tokenize(char *buf, char **argv, int argv_max)
     return argc;
 }
 
+void shell_print_help(void)
+{
+    cmd_help(0, 0);
+}
+
 static void dispatch(char *line)
 {
     char *argv[SHELL_ARGC_MAX];
@@ -299,11 +296,13 @@ static void dispatch(char *line)
 }
 
 /* ------------------------------------------------------------------ */
-/* Shell main loop                                                     */
+/* Shell main loop — signature matches shell.h: void shell_run(void*)  */
 /* ------------------------------------------------------------------ */
 
-void shell_run(void)
+void shell_run(void *arg)
 {
+    (void)arg;
+
     terminal_init();
 
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);

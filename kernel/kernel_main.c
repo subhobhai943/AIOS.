@@ -21,7 +21,6 @@
 #include "fs/vfs.h"
 #include "task.h"
 #include "sched.h"
-#include "kthread.h"
 #include "acpi.h"
 #include "gfx/framebuffer.h"
 #include "gfx/colors.h"
@@ -42,6 +41,13 @@ extern uint8_t _kernel_end;
 #define HEAP_SIZE   (2u * 1024u * 1024u)
 
 extern void pf_handler(interrupt_frame_t *frame);
+
+/* ── Trampoline: task_create needs void(*)(void),
+         but shell_run takes void*.  Bridge them here. ── */
+static void shell_entry(void)
+{
+    shell_run(0);
+}
 
 /* ── Helpers ─────────────────────────────────────────────── */
 static void print_ok(const char *msg)
@@ -92,7 +98,7 @@ static void de_test_handler(interrupt_frame_t *frame)
     frame->rip += 3;
 }
 
-/* ── PIT IRQ handler ────────────────────────────────────── */
+/* ── IRQ handlers ─────────────────────────────────────────────── */
 static void pit_irq_handler(interrupt_frame_t *f)
 {
     (void)f;
@@ -197,12 +203,11 @@ void kernel_main(uint32_t magic, uint32_t addr)
     __asm__ volatile ("sti");
     print_ok("Interrupts enabled (STI)");
 
-    /* ── Phase 10.1: Framebuffer init ──────────────────────── */
+    /* ── Framebuffer init ────────────────────────────────────── */
     if (magic == MULTIBOOT2_MAGIC && fb_init_from_multiboot(addr)) {
         framebuffer_t *fb   = fb_get();
         const gui_font_t *font = font_load_builtin();
 
-        /* Splash screen while rest of kernel boots */
         fb_clear(UI_COLOR_DESKTOP_BG);
         fb_fill_rect(0, 0, fb->width, 48, UI_COLOR_TASKBAR_BG);
         fb_draw_rect(0, 0, fb->width, 48, UI_COLOR_ACCENT);
@@ -230,16 +235,11 @@ void kernel_main(uint32_t magic, uint32_t addr)
         }
     }
 
-    /* ── Phase 3.1: PCI ─────────────────────────────────────── */
-    vga_puts_color("--- Phase 3.1: PCI ---\n",
-                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    pci_init();
-    pci_dump();
+    vga_puts_color("--- Phase 3.1: PCI ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    pci_init(); pci_dump();
     print_ok("PCI enumeration complete");
 
-    /* ── Phase 5.3: ACPI ─────────────────────────────────────── */
-    vga_puts_color("--- Phase 5.3: ACPI ---\n",
-                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts_color("--- Phase 5.3: ACPI ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     if (acpi_init()) {
         acpi_dump_info();
         print_ok("ACPI: RSDP/FADT parsed, power management ready");
@@ -247,18 +247,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("ACPI init failed — reboot/shutdown use fallbacks");
     }
 
-    /* ── Phase 3.2: AHCI ─────────────────────────────────────── */
-    vga_puts_color("--- Phase 3.2: AHCI ---\n",
-                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts_color("--- Phase 3.2: AHCI ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     int ahci_ok   = 0;
     int ahci_port = -1;
     if (ahci_init() == 0) {
         for (int p = 0; p < 32; p++) {
-            if (ahci_port_available(p)) {
-                ahci_sector0_test(p);
-                ahci_port = p;
-                break;
-            }
+            if (ahci_port_available(p)) { ahci_sector0_test(p); ahci_port = p; break; }
         }
         print_ok("AHCI driver initialised");
         ahci_ok = 1;
@@ -266,9 +260,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("AHCI init failed or no controller present");
     }
 
-    /* ── Phase 3.3: FAT32 + VFS ─────────────────────────────── */
-    vga_puts_color("--- Phase 3.3: FAT32 + VFS ---\n",
-                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts_color("--- Phase 3.3: FAT32 + VFS ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     if (ahci_ok && ahci_port >= 0) {
         if (fat32_init(ahci_port, 0) == 0) {
             fat32_sector0_test();
@@ -290,21 +282,19 @@ void kernel_main(uint32_t magic, uint32_t addr)
             print_warn("FAT32 init failed");
         }
     } else {
-        vfs_init(1); /* initrd-only VFS */
+        vfs_init(1);
         print_warn("FAT32/VFS: no AHCI disk — initrd-only VFS active");
     }
 
-    /* ── Phase 4: Scheduler ─────────────────────────────────── */
-    vga_puts_color("--- Phase 4: Scheduler ---\n",
-                   VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    /* ── Scheduler ────────────────────────────────────────────────── */
     task_init();
     print_ok("Task table initialised (boot task = PID 0)");
     sched_init();
     print_ok("Scheduler initialised");
 
-    /* ── Phase 5.2: Shell kthread ────────────────────────────── */
+    /* ── Shell kthread — use trampoline so task_create gets void(*)(void) ── */
     {
-        task_t *shell_task = task_create(shell_run, 65536, "shell");
+        task_t *shell_task = task_create(shell_entry, 65536, "shell");
         if (shell_task) {
             sched_add(shell_task);
             print_ok("Shell kthread created and enqueued");
@@ -313,7 +303,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         }
     }
 
-    /* ── Phase 10: GUI ──────────────────────────────────────── */
+    /* ── GUI ──────────────────────────────────────────────────── */
     if (gui_framebuffer_ready) {
         gui_input_init(fb_get()->width, fb_get()->height);
         gui_input_enable();
@@ -323,11 +313,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_ok("VGA text mode active — type 'startx' to launch GUI");
     }
 
-    /* ── PIT IRQ smoketest tasks ────────────────────────────── */
-    if (timer_irq_ready) {
-        (void)timer_irq_ready;
-        /* smoketest tasks removed — shell + GUI own the screen now */
-    }
+    (void)timer_irq_ready;
 
     vga_puts_color(
         "\nAIOS Phase 11 boot complete.\n"
@@ -335,9 +321,5 @@ void kernel_main(uint32_t magic, uint32_t addr)
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     klog("Phase 11 boot complete.\r\n");
 
-    /* Boot task becomes the idle task */
-    for (;;) {
-        sched_yield();
-        __asm__ volatile ("hlt");
-    }
+    for (;;) { sched_yield(); __asm__ volatile ("hlt"); }
 }
