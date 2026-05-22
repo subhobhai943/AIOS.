@@ -1,16 +1,9 @@
 /* kernel/gui/input_wiring.c — Phase 10.3
  *
  * Activate GUI input mode: redirect mouse and keyboard callbacks
- * from the VGA/terminal subsystem to the GUI event queue
- * (gui_input.c).
+ * from the VGA/terminal subsystem to the GUI event queue.
  *
- * Call gui_wiring_activate() exactly once, from the startx command
- * (shell.c Phase 10.6).  After this call:
- *   - Every PS/2 mouse IRQ12 event pushes a gui_event_t via
- *     gui_input_push_mouse().
- *   - Every PS/2 keyboard IRQ1 event pushes a gui_event_t via
- *     gui_input_push_key().
- *   - The VGA terminal stops consuming keyboard events.
+ * Call gui_wiring_activate() once from the startx shell command.
  *
  * Constraints:
  *   - Freestanding C, -ffreestanding -nostdlib -mno-red-zone
@@ -22,9 +15,11 @@
 #include <stdbool.h>
 
 #include "input_wiring.h"
-#include "input.h"
+#include "input.h"          /* gui_event_t, GUI_MOD_*, GUI_MOUSE_BUTTON_*, */
+                            /* gui_input_push_key_down/up,                  */
+                            /* gui_input_push_mouse_absolute                 */
 
-/* Use bare names — resolved via -I./kernel/include in the Makefile */
+/* keyboard.h / mouse.h live in kernel/include/ — resolved via -I flag */
 #include "keyboard.h"
 #include "mouse.h"
 #include "../serial.h"
@@ -33,71 +28,51 @@
 static bool g_gui_wiring_active = false;
 
 /* ── GUI keyboard callback ──────────────────────────────────── */
+/*
+ * key_event_t (keyboard.h):
+ *   uint8_t scancode, char ascii, bool pressed,
+ *   bool shift, bool ctrl, bool alt
+ * — no 'modifiers' byte; build it ourselves.
+ *
+ * gui_event_t (input.h):
+ *   keycode   = uint8_t  (scancode)
+ *   modifiers = uint8_t  (GUI_MOD_* bitmask)
+ *   — no 'ascii' or 'key' field
+ */
 static void gui_kbd_callback(const key_event_t *ke)
 {
     if (!ke) return;
 
-    gui_event_t ev;
-    ev.type     = ke->pressed ? GUI_EVENT_KEY_DOWN : GUI_EVENT_KEY_UP;
-    ev.key      = ke->scancode;
-    ev.ascii    = ke->ascii;
-    ev.mods     = ke->modifiers;
-    ev.x        = 0;
-    ev.y        = 0;
-    ev.buttons  = 0;
+    uint8_t mods = 0;
+    if (ke->shift) mods |= GUI_MOD_SHIFT;
+    if (ke->ctrl)  mods |= GUI_MOD_CTRL;
+    if (ke->alt)   mods |= GUI_MOD_ALT;
 
-    gui_input_push_key(&ev);
+    if (ke->pressed)
+        gui_input_push_key_down(ke->scancode, mods);
+    else
+        gui_input_push_key_up(ke->scancode, mods);
 }
 
 /* ── GUI mouse callback ─────────────────────────────────────── */
+/*
+ * mouse_event_t (mouse.h):
+ *   int32_t dx, dy, abs_x, abs_y
+ *   uint8_t buttons, prev_buttons
+ */
 static void gui_mouse_callback(const mouse_event_t *me)
 {
     if (!me) return;
 
-    /* --- Movement event --- */
-    if (me->dx != 0 || me->dy != 0) {
-        gui_event_t ev;
-        ev.type    = GUI_EVENT_MOUSE_MOVE;
-        ev.x       = me->abs_x;
-        ev.y       = me->abs_y;
-        ev.buttons = me->buttons;
-        ev.key     = 0;
-        ev.ascii   = 0;
-        ev.mods    = 0;
-        gui_input_push_mouse(&ev);
-    }
-
-    /* --- Button change events --- */
-    uint8_t changed = me->buttons ^ me->prev_buttons;
-    if (changed) {
-        static const uint8_t btn_masks[3] = {
-            GUI_MOUSE_BUTTON_LEFT,
-            GUI_MOUSE_BUTTON_RIGHT,
-            GUI_MOUSE_BUTTON_MIDDLE
-        };
-        for (int i = 0; i < 3; i++) {
-            if (!(changed & btn_masks[i])) continue;
-
-            gui_event_t ev;
-            ev.type    = (me->buttons & btn_masks[i])
-                         ? GUI_EVENT_MOUSE_DOWN
-                         : GUI_EVENT_MOUSE_UP;
-            ev.x       = me->abs_x;
-            ev.y       = me->abs_y;
-            ev.buttons = btn_masks[i];
-            ev.key     = 0;
-            ev.ascii   = 0;
-            ev.mods    = 0;
-            gui_input_push_mouse(&ev);
-        }
-    }
+    /* Push absolute position + button state every packet */
+    gui_input_push_mouse_absolute(me->abs_x, me->abs_y, me->buttons);
 }
 
 /* ── gui_wiring_activate ─────────────────────────────────────── */
 void gui_wiring_activate(void)
 {
     if (g_gui_wiring_active) {
-        klog("[input_wiring] already active — ignoring duplicate call\n");
+        klog("[input_wiring] already active\n");
         return;
     }
 
