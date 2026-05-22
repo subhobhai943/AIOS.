@@ -1,6 +1,6 @@
 # ============================================================
 # AIOS — Build System
-# Phase 1: Foundation
+# Phase 11: GUI Apps + Shell
 # Cross-compiler target: x86_64-elf
 # ============================================================
 
@@ -23,13 +23,12 @@ ISO     := aios.iso
 INITRD  := boot/initrd.img
 
 # Sources
+# Exclude full notepad.c and ai_chat.c — _simple variants are used instead.
+# Exclude vga_phase51.c — its symbols are already in vga.c.
 C_SRCS  := $(shell find kernel -type f -name '*.c' \
-           ! -path 'kernel/shell/*' \
-           ! -path 'kernel/llm/*' \
            ! -path 'kernel/apps/notepad.c' \
            ! -path 'kernel/apps/ai_chat.c' \
-           ! -path 'kernel/gui/input_wiring.c' \
-           ! -path 'kernel/keyboard_gui_hook.c')
+           ! -path 'kernel/vga_phase51.c')
 ASM_SRCS := $(shell find kernel -type f -name '*.asm')
 
 C_OBJS  := $(patsubst kernel/%.c,  $(BUILD)/%.o, $(C_SRCS))

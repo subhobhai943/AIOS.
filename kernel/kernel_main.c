@@ -1,6 +1,6 @@
 /* ============================================================
  * AIOS — Kernel Main
- * Phase 10.4: Basic GUI window manager test
+ * Phase 11: GUI Apps + Shell
  * ============================================================ */
 
 #include "include/vga.h"
@@ -21,12 +21,14 @@
 #include "fs/vfs.h"
 #include "task.h"
 #include "sched.h"
+#include "kthread.h"
 #include "acpi.h"
-#include "gfx/framebuffer.h"  /* Phase 10.1 */
-#include "gfx/colors.h"       /* Phase 10.x UI colours */
-#include "gfx/font.h"         /* Phase 10.2 text rendering */
-#include "gui/input_mode.h"   /* Phase 10.3 GUI input routing */
-#include "gui/wm.h"           /* Phase 10.4 window manager */
+#include "gfx/framebuffer.h"
+#include "gfx/colors.h"
+#include "gfx/font.h"
+#include "gui/input_mode.h"
+#include "gui/wm.h"
+#include "shell/shell.h"
 
 #include <stdint.h>
 
@@ -90,7 +92,7 @@ static void de_test_handler(interrupt_frame_t *frame)
     frame->rip += 3;
 }
 
-/* ── PIT IRQ handler — now calls sched_tick() ───────────── */
+/* ── PIT IRQ handler ────────────────────────────────────── */
 static void pit_irq_handler(interrupt_frame_t *f)
 {
     (void)f;
@@ -107,56 +109,10 @@ static void mouse_isr(interrupt_frame_t *f)
     (void)f; mouse_handle_irq(); apic_send_eoi();
 }
 
-static volatile int g_task_a_done = 0;
-static volatile int g_task_b_done = 0;
-static volatile int g_task_c_done = 0;
-
-static void task_a(void)
-{
-    for (int i = 0; i < 5; i++) {
-        klog("[TASK A] tick i=");
-        klog_dec((uint32_t)i);
-        klog("\r\n");
-        vga_puts_color("A", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
-        sched_sleep(250);
-    }
-    vga_puts_color("[A done]", VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
-    g_task_a_done = 1;
-    sched_exit();
-}
-
-static void task_b(void)
-{
-    for (int i = 0; i < 5; i++) {
-        klog("[TASK B] tick i=");
-        klog_dec((uint32_t)i);
-        klog("\r\n");
-        vga_puts_color("B", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-        sched_sleep(250);
-    }
-    vga_puts_color("[B done]", VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    g_task_b_done = 1;
-    sched_exit();
-}
-
-static void task_c(void)
-{
-    for (int i = 0; i < 5; i++) {
-        klog("[TASK C] tick i=");
-        klog_dec((uint32_t)i);
-        klog("\r\n");
-        vga_puts_color("C", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-        sched_sleep(250);
-    }
-    vga_puts_color("[C done]", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    g_task_c_done = 1;
-    sched_exit();
-}
-
 void kernel_main(uint32_t magic, uint32_t addr)
 {
     int gui_framebuffer_ready = 0;
-    int timer_irq_ready = 0;
+    int timer_irq_ready       = 0;
 
     vga_init();
     serial_init(SERIAL_COM1, 115200);
@@ -168,12 +124,12 @@ void kernel_main(uint32_t magic, uint32_t addr)
         "  AIOS  Autonomous Intelligent Operating System\n",
         VGA_COLOR_WHITE, VGA_COLOR_BLACK);
     vga_puts_color(
-        "  Phase 10.4: Basic GUI window manager test\n",
+        "  Phase 11: GUI Apps + Shell\n",
         VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts_color(
         "====================================================\n\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("\r\n=== AIOS Phase 10.4 boot ===\r\n");
+    klog("\r\n=== AIOS Phase 11 boot ===\r\n");
 
     if (magic == MULTIBOOT2_MAGIC)
         print_ok("Multiboot2 magic OK");
@@ -241,52 +197,47 @@ void kernel_main(uint32_t magic, uint32_t addr)
     __asm__ volatile ("sti");
     print_ok("Interrupts enabled (STI)");
 
-    /* Phase 10.1/10.4: framebuffer + basic window manager smoke-test. */
+    /* ── Phase 10.1: Framebuffer init ──────────────────────── */
     if (magic == MULTIBOOT2_MAGIC && fb_init_from_multiboot(addr)) {
-        framebuffer_t *fb = fb_get();
+        framebuffer_t *fb   = fb_get();
         const gui_font_t *font = font_load_builtin();
 
+        /* Splash screen while rest of kernel boots */
         fb_clear(UI_COLOR_DESKTOP_BG);
-        fb_fill_rect(0, 0, fb->width, 40, UI_COLOR_TASKBAR_BG);
-        fb_draw_rect(0, 0, fb->width, 40, UI_COLOR_ACCENT);
-
-        uint32_t text_y = 0;
-        if (font->height < 40u) {
-            text_y = (40u - font->height) / 2u;
-        }
+        fb_fill_rect(0, 0, fb->width, 48, UI_COLOR_TASKBAR_BG);
+        fb_draw_rect(0, 0, fb->width, 48, UI_COLOR_ACCENT);
+        uint32_t text_y = (font->height < 48u) ? (48u - font->height) / 2u : 0u;
         font_draw_string_centered(fb, font, 0, text_y, fb->width,
-                                  "AIOS Desktop — WM", UI_COLOR_TEXT_FG,
-                                  UI_COLOR_TASKBAR_BG);
+                                  "AIOS — Autonomous Intelligent OS",
+                                  UI_COLOR_TEXT_FG, UI_COLOR_TASKBAR_BG);
 
-        print_ok("Framebuffer+font: GUI banner rendered (Phase 10.x)");
+        print_ok("Framebuffer: GUI splash rendered");
         gui_framebuffer_ready = 1;
     } else {
-        print_warn("Framebuffer tag missing or unsupported — staying in VGA text mode");
+        print_warn("No framebuffer tag — staying in VGA text mode");
     }
 
-    vga_puts_color("\n  [TEST] pit_sleep_ms(200)...\n",
-                   VGA_COLOR_BROWN, VGA_COLOR_BLACK);
+    /* ── PIT IRQ delivery check ─────────────────────────────── */
     {
         uint64_t t0 = pit_get_ticks();
-        for (uint32_t spin = 0; spin < 100000000u && pit_get_ticks() == t0; spin++) {
+        for (uint32_t spin = 0; spin < 100000000u && pit_get_ticks() == t0; spin++)
             __asm__ volatile ("pause");
-        }
-        uint64_t elapsed = pit_get_ticks() - t0;
-        if (elapsed > 0ULL) {
+        if (pit_get_ticks() != t0) {
             timer_irq_ready = 1;
             print_ok("PIT IRQ delivery verified");
         } else {
-            print_warn("PIT IRQ did not advance; scheduler/input may be limited");
+            print_warn("PIT IRQ did not advance; preemption may be limited");
         }
     }
 
-    vga_putchar('\n');
+    /* ── Phase 3.1: PCI ─────────────────────────────────────── */
     vga_puts_color("--- Phase 3.1: PCI ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     pci_init();
     pci_dump();
     print_ok("PCI enumeration complete");
 
+    /* ── Phase 5.3: ACPI ─────────────────────────────────────── */
     vga_puts_color("--- Phase 5.3: ACPI ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     if (acpi_init()) {
@@ -296,6 +247,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("ACPI init failed — reboot/shutdown use fallbacks");
     }
 
+    /* ── Phase 3.2: AHCI ─────────────────────────────────────── */
     vga_puts_color("--- Phase 3.2: AHCI ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     int ahci_ok   = 0;
@@ -314,6 +266,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("AHCI init failed or no controller present");
     }
 
+    /* ── Phase 3.3: FAT32 + VFS ─────────────────────────────── */
     vga_puts_color("--- Phase 3.3: FAT32 + VFS ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     if (ahci_ok && ahci_port >= 0) {
@@ -337,55 +290,54 @@ void kernel_main(uint32_t magic, uint32_t addr)
             print_warn("FAT32 init failed");
         }
     } else {
-        print_warn("FAT32/VFS skipped — no AHCI disk");
+        vfs_init(1); /* initrd-only VFS */
+        print_warn("FAT32/VFS: no AHCI disk — initrd-only VFS active");
     }
 
-    vga_putchar('\n');
-    vga_puts_color("--- Phase 4.1+4.2: Scheduler ---\n",
+    /* ── Phase 4: Scheduler ─────────────────────────────────── */
+    vga_puts_color("--- Phase 4: Scheduler ---\n",
                    VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-
     task_init();
     print_ok("Task table initialised (boot task = PID 0)");
-
     sched_init();
-    print_ok("Scheduler initialised (idle task created)");
+    print_ok("Scheduler initialised");
 
+    /* ── Phase 5.2: Shell kthread ────────────────────────────── */
+    {
+        task_t *shell_task = task_create(shell_run, 65536, "shell");
+        if (shell_task) {
+            sched_add(shell_task);
+            print_ok("Shell kthread created and enqueued");
+        } else {
+            print_warn("Shell kthread creation failed");
+        }
+    }
+
+    /* ── Phase 10: GUI ──────────────────────────────────────── */
     if (gui_framebuffer_ready) {
+        gui_input_init(fb_get()->width, fb_get()->height);
         gui_input_enable();
         gui_wm_start();
-        print_ok("GUI input enabled and window manager thread started");
-    }
-
-    if (timer_irq_ready) {
-        task_t *ta = task_create(task_a, 8192, "task_a");
-        task_t *tb = task_create(task_b, 8192, "task_b");
-        task_t *tc = task_create(task_c, 8192, "task_c");
-        KERNEL_ASSERT(ta && tb && tc, "test task creation failed");
-        sched_add(ta);
-        sched_add(tb);
-        sched_add(tc);
-        print_ok("Tasks A/B/C created and enqueued");
-    }
-
-    vga_puts_color(
-        "  Scheduler running. Output (A/B/C) shows preemption:\n",
-        VGA_COLOR_BROWN, VGA_COLOR_BLACK);
-
-    if (timer_irq_ready) {
-        while (!g_task_a_done || !g_task_b_done || !g_task_c_done) {
-            sched_yield();
-        }
-        vga_putchar('\n');
-        print_ok("Scheduler test PASSED — tasks A/B/C completed");
+        print_ok("GUI input enabled and WM thread started");
     } else {
-        print_warn("Scheduler preemption test skipped — PIT IRQ unavailable");
+        print_ok("VGA text mode active — type 'startx' to launch GUI");
     }
 
-    vga_putchar('\n');
-    vga_puts_color(
-        "AIOS Phase 10.4 boot complete. Basic GUI window manager running.\n",
-        VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    klog("Phase 10.4 boot complete. Basic GUI window manager running.\r\n");
+    /* ── PIT IRQ smoketest tasks ────────────────────────────── */
+    if (timer_irq_ready) {
+        (void)timer_irq_ready;
+        /* smoketest tasks removed — shell + GUI own the screen now */
+    }
 
-    for (;;) __asm__ volatile ("hlt");
+    vga_puts_color(
+        "\nAIOS Phase 11 boot complete.\n"
+        "Shell is running. Type 'help' for commands.\n",
+        VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    klog("Phase 11 boot complete.\r\n");
+
+    /* Boot task becomes the idle task */
+    for (;;) {
+        sched_yield();
+        __asm__ volatile ("hlt");
+    }
 }

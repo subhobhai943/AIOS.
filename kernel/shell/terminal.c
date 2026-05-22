@@ -1,42 +1,79 @@
-@@ -101,6 +101,9 @@ void term_move_cursor(uint8_t col, uint8_t row)
- {
-     cursor_col = (col >= TERM_COLS) ? (TERM_COLS - 1) : col;
-     cursor_row = (row >= TERM_ROWS) ? (TERM_ROWS - 1) : row;
-+
-+    /* Mirror cursor movement into GUI terminal if present. */
-+    terminal_gui_move_cursor(cursor_col, cursor_row);
-@@ -109,6 +112,10 @@ void term_set_color(uint8_t fg, uint8_t bg)
- {
-     term_color = (fg & 0x0F) | ((bg & 0x0F) << 4);
-+
-+    /* GUI terminal maintains its own colours; we pass logical
-+     * values so it can decide how to map them.
-+     */
-+    terminal_gui_set_color(fg, bg);
-@@ -116,6 +123,9 @@ void term_reset_color(void)
- {
-     term_color = (TERM_FG_LGRAY | (TERM_BG_BLACK << 4));
-+    terminal_gui_reset_color();
-@@ -132,6 +140,9 @@ void term_clear_line_to_end(void)
-         term_buffer[row][col + 1] = entry;
-     }
-+
-+    terminal_gui_clear_line_to_end();
-@@ -139,6 +150,9 @@ void term_clear_line(void)
-         term_buffer[row][col] = entry;
-     }
-+    terminal_gui_clear_line();
-@@ -150,6 +164,9 @@ void term_clear_screen(void)
-         }
-     }
-     term_move_cursor(0, 0);
-+
-+    terminal_gui_clear_screen();
-@@ -158,6 +175,10 @@ uint8_t term_cursor_col(void)
- {
-     return cursor_col;
- }
-@@ -165,6 +186,10 @@ uint8_t term_cursor_row(void)
- {
-     return cursor_row;
- }
+/* kernel/shell/terminal.c — Phase 5.1
+ *
+ * Terminal layer: bridges the keyboard IRQ path to the shell readline.
+ * No libc. No standard I/O. Only VGA and keyboard headers.
+ */
+
+#include "terminal.h"
+#include "../include/vga.h"
+#include "../include/keyboard.h"
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+
+/* ── Internal line buffer ────────────────────────────────── */
+#define LINE_MAX 256
+
+static char     g_line[LINE_MAX];
+static size_t   g_line_len  = 0;
+static volatile int g_line_ready = 0;   /* set to 1 by terminal_feed on Enter */
+
+/* ── Init ────────────────────────────────────────────────── */
+void terminal_init(void)
+{
+    g_line_len   = 0;
+    g_line_ready = 0;
+}
+
+/* ── Feed — called from keyboard IRQ (text-mode path) ────── */
+void terminal_feed(char ascii, uint8_t scancode, bool pressed)
+{
+    (void)scancode;
+    if (!pressed) return;
+
+    if (ascii == '\r' || ascii == '\n') {
+        g_line[g_line_len] = '\0';
+        g_line_ready = 1;
+    } else if (ascii == '\b') {
+        if (g_line_len > 0) {
+            g_line_len--;
+            vga_backspace();
+        }
+    } else if (ascii >= 0x20 && g_line_len < LINE_MAX - 1) {
+        g_line[g_line_len++] = ascii;
+        vga_putchar(ascii);
+    }
+}
+
+/* ── Readline — blocks (hlt loop) until Enter pressed ────── */
+size_t terminal_readline(char *buf, size_t maxlen)
+{
+    g_line_len   = 0;
+    g_line_ready = 0;
+
+    /* Install ourselves as the keyboard text-mode callback. */
+    keyboard_set_text_callback(terminal_feed);
+
+    while (!g_line_ready) {
+        __asm__ volatile ("hlt");
+    }
+
+    size_t n = (g_line_len < maxlen - 1) ? g_line_len : maxlen - 1;
+    for (size_t i = 0; i < n; i++)
+        buf[i] = g_line[i];
+    buf[n] = '\0';
+    return n;
+}
+
+/* ── Write helpers ───────────────────────────────────────── */
+void terminal_write(const char *str)
+{
+    while (str && *str)
+        vga_putchar(*str++);
+}
+
+void terminal_write_len(const char *str, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+        vga_putchar(str[i]);
+}
