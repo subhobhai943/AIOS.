@@ -25,6 +25,7 @@
 #include "gfx/framebuffer.h"
 #include "gfx/colors.h"
 #include "gfx/font.h"
+#include "gui/input.h"
 #include "gui/input_mode.h"
 #include "gui/wm.h"
 #include "shell/shell.h"
