@@ -14,6 +14,13 @@
 #include "tensor.h"
 #include "../simd.h"   /* simd_matmul_f32, simd_vec_add_f32, etc. */
 
+static void ops_memcpy_bytes(void *dst, const void *src, size_t n)
+{
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    while (n--) *d++ = *s++;
+}
+
 /* ── tiny scalar math helpers (no libm) ─────────────────── */
 
 /* Fast inverse-square-root used for normalisation.
@@ -43,7 +50,7 @@ static inline float _rsqrtf(float x)
 }
 
 /* Scalar expf — Cephes-derived minimax for [-87, 88]. */
-static float _expf(float x)
+float ops_expf_approx(float x)
 {
     /* clamp to prevent NaN */
     if (x >  88.3762f) return 3.40282347e+38f;
@@ -67,18 +74,18 @@ static float _expf(float x)
     if (e >= 255) return 3.40282347e+38f;
     uint32_t bits = (uint32_t)e << 23;
     float scale;
-    __builtin_memcpy(&scale, &bits, sizeof(scale));
+    union {
+        uint32_t u;
+        float f;
+    } scale_bits = { .u = bits };
+    scale = scale_bits.f;
     return p * scale;
 }
 
-/* Scalar tanhf approximation used by GELU. */
-static float _tanhf(float x)
+float ops_sqrtf_approx(float x)
 {
-    /* clamp: tanh(x) → ±1 quickly */
-    if (x >  9.0f) return  1.0f;
-    if (x < -9.0f) return -1.0f;
-    float e2 = _expf(2.0f * x);
-    return (e2 - 1.0f) / (e2 + 1.0f);
+    if (x <= 0.0f) return 0.0f;
+    return x * _rsqrtf(x);
 }
 
 /* Scalar cosf + sinf via Taylor series (for RoPE). */
@@ -122,10 +129,15 @@ static float _powf_pos(float base, float e)
     float x = base;
     /* range reduce: x = m * 2^e2, m in [1, 2) */
     uint32_t bits;
-    __builtin_memcpy(&bits, &x, sizeof(bits));
+    union {
+        uint32_t u;
+        float f;
+    } bitcast = { .f = x };
+    bits = bitcast.u;
     int32_t e2 = (int32_t)((bits >> 23) & 0xFF) - 127;
     bits = (bits & 0x807FFFFF) | (0x7F << 23); /* set exponent to 127 */
-    __builtin_memcpy(&x, &bits, sizeof(x));
+    bitcast.u = bits;
+    x = bitcast.f;
     /* x now in [1, 2); subtract 1 for the series */
     float r = x - 1.0f;
     /* ln(1+r) minimax */
@@ -133,7 +145,7 @@ static float _powf_pos(float base, float e)
                  0.33333333f + r * (-0.25f + r *
                  0.2f))));
     float ln_x = ln_m + (float)e2 * 0.6931471806f;
-    return _expf(e * ln_x);
+    return ops_expf_approx(e * ln_x);
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -165,8 +177,7 @@ void ops_fill(tensor_t *t, float val)
 
 void ops_copy(tensor_t *dst, const tensor_t *src)
 {
-    __builtin_memcpy(dst->data, src->data,
-                     src->numel * sizeof(float));
+    ops_memcpy_bytes(dst->data, src->data, src->numel * sizeof(float));
 }
 
 /* ──────────────────────────────────────────────────────────
@@ -275,7 +286,7 @@ void ops_embedding_lookup(const tensor_t *table,
         /* Each row is embed_dim floats */
         const float *src = w + (size_t)id * (size_t)embed_dim;
         float       *d   = dst + (size_t)i * (size_t)embed_dim;
-        __builtin_memcpy(d, src, (size_t)embed_dim * sizeof(float));
+        ops_memcpy_bytes(d, src, (size_t)embed_dim * sizeof(float));
     }
 }
 

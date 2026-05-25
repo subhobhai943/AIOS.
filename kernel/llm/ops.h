@@ -164,4 +164,11 @@ void ops_embedding_lookup(const tensor_t *table,
 void ops_rope(tensor_t *q, tensor_t *k,
               int32_t pos, float base);
 
+/*
+ * Freestanding scalar helpers shared by the LLM implementation.
+ * These avoid pulling libc/libm into the kernel link.
+ */
+float ops_expf_approx(float x);
+float ops_sqrtf_approx(float x);
+
 #endif /* OPS_H */

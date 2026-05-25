@@ -7,7 +7,7 @@
  *  - Only <stdint.h>, <stddef.h>, <stdbool.h>
  *  - All heap: kmalloc_aligned / kfree_aligned  (heap.h)
  *  - Debug log: klog / klog_dec  (serial.h)
- *  - No libm: uses __builtin_sqrtf, __builtin_expf, __builtin_fabsf
+ *  - No libm: uses freestanding helpers from ops.c
  */
 
 #include <stdint.h>
@@ -87,7 +87,7 @@ static void rms_norm_forward(
     for (int32_t i = 0; i < n; ++i)
         ss += x[i] * x[i];
     ss = ss / (float)n + RMSNORM_EPS;
-    float inv_rms = 1.0f / __builtin_sqrtf(ss);
+    float inv_rms = 1.0f / ops_sqrtf_approx(ss);
 
     for (int32_t i = 0; i < n; ++i)
         out[i] = gamma[i] * (x[i] * inv_rms);
@@ -159,7 +159,7 @@ static void gelu_inplace(float *x, int32_t n) {
 static void swiglu_inplace(float *gate_buf, float *up_buf, int32_t n) {
     for (int32_t i = 0; i < n; ++i) {
         float g = gate_buf[i];
-        float sig = 1.0f / (1.0f + __builtin_expf(-g));
+        float sig = 1.0f / (1.0f + ops_expf_approx(-g));
         up_buf[i] = up_buf[i] * (g * sig);
     }
 }

@@ -60,6 +60,7 @@ case "$ACTION" in
             -cdrom aios.iso \
             -m 512M \
             -vga std \
+            -display gtk,grab-on-hover=on,show-tabs=off \
             -serial stdio \
             -no-reboot \
             -no-shutdown
@@ -72,6 +73,7 @@ case "$ACTION" in
             -cdrom aios.iso \
             -m 512M \
             -vga std \
+            -display gtk,grab-on-hover=on,show-tabs=off \
             -s -S \
             -no-reboot \
             -no-shutdown &

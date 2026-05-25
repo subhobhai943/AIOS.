@@ -6,6 +6,15 @@ static gui_window_t *g_win_head = 0;
 static gui_window_t *g_win_tail = 0;
 static uint32_t      g_next_window_id = 1;
 
+static void gui_window_deactivate_all(void)
+{
+    gui_window_t *cur = g_win_head;
+    while (cur) {
+        cur->is_active = false;
+        cur = cur->next;
+    }
+}
+
 void gui_window_system_init(void)
 {
     g_win_head = 0;
@@ -53,13 +62,15 @@ gui_window_t *gui_create_window(int32_t x,
     gui_window_t *win = (gui_window_t *)kmalloc(sizeof(gui_window_t));
     if (!win) return 0;
 
+    gui_window_deactivate_all();
+
     win->id       = g_next_window_id++;
     win->x        = x;
     win->y        = y;
     win->width    = w;
     win->height   = h;
     win->state    = GUI_WINDOW_STATE_NORMAL;
-    win->is_active = false;
+    win->is_active = true;
     win->title    = title;
     win->draw     = draw_cb;
     win->handle_event = event_cb;

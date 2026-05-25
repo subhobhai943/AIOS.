@@ -18,6 +18,11 @@
 #include "gfx/font.h"
 #include "gui/input.h"
 #include "gui/window.h"
+#include "apps/ai_chat.h"
+#include "apps/explorer.h"
+#include "apps/notepad.h"
+#include "apps/settings.h"
+#include "apps/terminal_gui.h"
 #include "kthread.h"
 #include "sync.h"
 
@@ -180,6 +185,15 @@ static void wm_redraw_all(wm_state_t *st)
     wm_draw_cursor(fb, ms.x, ms.y);
 }
 
+static void wm_open_default_apps(void)
+{
+    terminal_gui_open();
+    explorer_open(0);
+    settings_open();
+    ai_chat_open();
+    notepad_open(0);
+}
+
 /* ------------------------------------------------------------------ */
 /* Event dispatch                                                       */
 /* ------------------------------------------------------------------ */
@@ -309,6 +323,7 @@ static void wm_thread_main(void *arg)
     desktop_init();
     taskbar_init(fb->width, fb->height);
     start_menu_init();
+    wm_open_default_apps();
 
     wm_state_t st;
     st.fb           = fb;

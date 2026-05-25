@@ -23,6 +23,9 @@ static uint32_t g_last_click_time_ms = 0;
 static int32_t  g_last_click_x       = 0;
 static int32_t  g_last_click_y       = 0;
 
+static void gui_input_emit_mouse_button_changes(uint8_t old_buttons,
+                                                uint8_t new_buttons);
+
 static uint32_t gui_input_now_ms(void)
 {
     /* PIT ticks at 1 kHz in current kernel; convert directly. */
@@ -116,20 +119,20 @@ static void gui_input_update_mouse_pos_locked(int32_t x, int32_t y)
 void gui_input_push_mouse_delta(int dx, int dy, uint8_t buttons)
 {
     gui_event_t ev;
+    uint8_t old_buttons;
 
     spin_lock(&g_gui_input_lock);
 
+    old_buttons = g_mouse_state.buttons;
     int32_t new_x = g_mouse_state.x + dx;
     int32_t new_y = g_mouse_state.y + dy;
     gui_input_update_mouse_pos_locked(new_x, new_y);
-
-    g_mouse_state.buttons = buttons;
 
     ev.type      = GUI_EVENT_MOUSE_MOVE;
     ev.time_ms   = gui_input_now_ms();
     ev.x         = g_mouse_state.x;
     ev.y         = g_mouse_state.y;
-    ev.buttons   = g_mouse_state.buttons;
+    ev.buttons   = buttons;
     ev.mouse_flags = GUI_MOUSE_FLAG_NONE;
     ev.keycode   = 0;
     ev.modifiers = 0;
@@ -137,22 +140,24 @@ void gui_input_push_mouse_delta(int dx, int dy, uint8_t buttons)
     spin_unlock(&g_gui_input_lock);
 
     gui_input_enqueue(&ev);
+    gui_input_emit_mouse_button_changes(old_buttons, buttons);
 }
 
 void gui_input_push_mouse_absolute(int32_t x, int32_t y, uint8_t buttons)
 {
     gui_event_t ev;
+    uint8_t old_buttons;
 
     spin_lock(&g_gui_input_lock);
 
+    old_buttons = g_mouse_state.buttons;
     gui_input_update_mouse_pos_locked(x, y);
-    g_mouse_state.buttons = buttons;
 
     ev.type      = GUI_EVENT_MOUSE_MOVE;
     ev.time_ms   = gui_input_now_ms();
     ev.x         = g_mouse_state.x;
     ev.y         = g_mouse_state.y;
-    ev.buttons   = g_mouse_state.buttons;
+    ev.buttons   = buttons;
     ev.mouse_flags = GUI_MOUSE_FLAG_NONE;
     ev.keycode   = 0;
     ev.modifiers = 0;
@@ -160,6 +165,7 @@ void gui_input_push_mouse_absolute(int32_t x, int32_t y, uint8_t buttons)
     spin_unlock(&g_gui_input_lock);
 
     gui_input_enqueue(&ev);
+    gui_input_emit_mouse_button_changes(old_buttons, buttons);
 }
 
 static void gui_input_push_mouse_button_internal(bool is_down,
@@ -201,6 +207,25 @@ static void gui_input_push_mouse_button_internal(bool is_down,
     spin_unlock(&g_gui_input_lock);
 
     gui_input_enqueue(&ev);
+}
+
+static void gui_input_emit_mouse_button_changes(uint8_t old_buttons,
+                                                uint8_t new_buttons)
+{
+    static const uint8_t masks[] = {
+        GUI_MOUSE_BUTTON_LEFT,
+        GUI_MOUSE_BUTTON_RIGHT,
+        GUI_MOUSE_BUTTON_MIDDLE,
+    };
+
+    for (uint32_t i = 0; i < (sizeof(masks) / sizeof(masks[0])); ++i) {
+        uint8_t mask = masks[i];
+        bool was_down = (old_buttons & mask) != 0;
+        bool is_down  = (new_buttons & mask) != 0;
+        if (was_down != is_down) {
+            gui_input_push_mouse_button_internal(is_down, mask);
+        }
+    }
 }
 
 void gui_input_push_key_down(uint8_t keycode, uint8_t modifiers)

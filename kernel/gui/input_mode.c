@@ -20,6 +20,7 @@ void gui_input_enable(void)
     if (g_gui_input_enabled) return;
     g_gui_input_enabled = 1;
 
+    keyboard_set_text_callback(0);
     mouse_set_gui_callback(gui_input_from_mouse_event);
     keyboard_set_gui_callback(gui_input_from_key_event);
 }

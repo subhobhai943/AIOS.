@@ -55,9 +55,7 @@ static inline void model_memset_f(float *dst, float v, size_t n) {
 static inline void model_memcpy_f(float *dst, const float *src, size_t n) {
     for (size_t i = 0; i < n; i++) dst[i] = src[i];
 }
-static inline float model_fmaxf(float a, float b) { return a > b ? a : b; }
-static inline float model_expf(float x) { return __builtin_expf(x); }
-static inline float model_logf(float x) { return __builtin_logf(x); }
+static inline float model_expf(float x) { return ops_expf_approx(x); }
 
 /* ── xorshift64 PRNG ─────────────────────────────────────────── */
 static inline uint64_t xorshift64(uint64_t *state) {

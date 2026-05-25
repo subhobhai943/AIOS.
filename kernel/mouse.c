@@ -5,9 +5,15 @@
 #include <stdint.h>
 
 #define MOUSE_CMD_ENABLE_AUX 0xA8u
+#define MOUSE_CMD_READ_CB    0x20u
+#define MOUSE_CMD_WRITE_CB   0x60u
 #define MOUSE_CMD_WRITE_NEXT 0xD4u
 #define MOUSE_DEV_ENABLE     0xF4u
 #define MOUSE_DEV_DEFAULTS   0xF6u
+
+#define MOUSE_CB_IRQ1        0x01u
+#define MOUSE_CB_IRQ12       0x02u
+#define MOUSE_CB_AUX_CLOCK   0x20u
 
 int mouse_x = 400;
 int mouse_y = 300;
@@ -67,6 +73,22 @@ static void mouse_write_device(uint8_t value)
     if (mouse_wait_output_full()) {
         (void)inb(MOUSE_DATA_PORT);
     }
+}
+
+static uint8_t mouse_read_controller_config(void)
+{
+    if (!mouse_wait_input_clear()) return 0;
+    outb(MOUSE_CMD_PORT, MOUSE_CMD_READ_CB);
+    if (!mouse_wait_output_full()) return 0;
+    return inb(MOUSE_DATA_PORT);
+}
+
+static void mouse_write_controller_config(uint8_t value)
+{
+    if (!mouse_wait_input_clear()) return;
+    outb(MOUSE_CMD_PORT, MOUSE_CMD_WRITE_CB);
+    if (!mouse_wait_input_clear()) return;
+    outb(MOUSE_DATA_PORT, value);
 }
 
 static void mouse_buffer_push(const mouse_event_t *ev)
@@ -151,6 +173,12 @@ void mouse_init(void)
 
     if (!mouse_wait_input_clear()) return;
     outb(MOUSE_CMD_PORT, MOUSE_CMD_ENABLE_AUX);
+
+    uint8_t cfg = mouse_read_controller_config();
+    cfg |= (uint8_t)(MOUSE_CB_IRQ1 | MOUSE_CB_IRQ12);
+    cfg &= (uint8_t)~MOUSE_CB_AUX_CLOCK;
+    mouse_write_controller_config(cfg);
+
     mouse_write_device(MOUSE_DEV_DEFAULTS);
     mouse_write_device(MOUSE_DEV_ENABLE);
 

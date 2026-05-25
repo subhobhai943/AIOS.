@@ -53,8 +53,27 @@ static void free_buf(float *p) {
  * -----------------------------------------------------------------------*/
 static void matvec(const float *W, const float *x, const float *bias,
                    float *out, int32_t M, int32_t N) {
-    /* ops_matmul(A[M,K], B[K,N], C[M,N]) — use K=N, N=1 */
-    ops_matmul(W, x, out, M, N, 1);
+    tensor_t tW = {
+        .data = (float *)W,
+        .dims = { M, N, 0, 0 },
+        .ndim = 2,
+        .numel = (size_t)M * (size_t)N,
+    };
+    tensor_t tx = {
+        .data = (float *)x,
+        .dims = { N, 1, 0, 0 },
+        .ndim = 2,
+        .numel = (size_t)N,
+    };
+    tensor_t tout = {
+        .data = out,
+        .dims = { M, 1, 0, 0 },
+        .ndim = 2,
+        .numel = (size_t)M,
+    };
+
+    /* ops_matmul(A[M,N], B[N,1], C[M,1]) */
+    ops_matmul(&tW, &tx, &tout);
     if (bias) {
         for (int32_t i = 0; i < M; ++i)
             out[i] += bias[i];
@@ -162,10 +181,8 @@ static void softmax_inplace(float *arr, int32_t len) {
         /* exp(x) ≈ 2^(x/ln2); use bit-manipulation trick */
         /* Simpler: clamp to avoid underflow then use series: */
         if (v < -80.0f) v = -80.0f;
-        /* Standard Taylor-inspired: e^v via __builtin_exp if compiler provides,
-         * else use a 5-term polynomial.  GCC -ffreestanding still provides
-         * __builtin_expf which lowers to fldl2e/fmul on x87 or an intrinsic. */
-        arr[i] = __builtin_expf(v);
+        /* Standard Taylor-inspired: use a freestanding local approximation. */
+        arr[i] = ops_expf_approx(v);
         sum += arr[i];
     }
 
@@ -210,7 +227,7 @@ int attn_forward(
     const int32_t head_dim    = n_embd / n_heads;         /* = kvc->head_dim */
     const int32_t kv_dim      = n_kv_heads * head_dim;   /* K/V projection size */
     /* Scale factor for dot-product attention: 1/sqrt(head_dim) */
-    const float   scale       = 1.0f / __builtin_sqrtf((float)head_dim);
+    const float   scale       = 1.0f / ops_sqrtf_approx((float)head_dim);
 
     /* ---- 1. Project Q, K, V ---- */
     float *q   = alloc_buf((size_t)n_embd);              /* [n_embd]  */
@@ -254,7 +271,7 @@ int attn_forward(
         k_view.dims[0] = kv_dims[0]; k_view.dims[1] = kv_dims[1]; k_view.dims[2] = kv_dims[2];
         k_view.numel  = (size_t)kv_dim;
 
-        ops_rope(&q_t, &k_view, pos);
+        ops_rope(&q_t, &k_view, pos, 10000.0f);
     }
 
     /* ---- 3. Write K_cur / V_cur into KV-cache at (layer, h, pos) ---- */
@@ -351,7 +368,6 @@ int attn_forward_full(
     /* kvc->cur_len tells us how many tokens are already cached (from a prior
      * call or a previous layer).  For the first layer of a fresh prompt,
      * cur_len == 0 on entry. */
-    const int32_t seq_len = kvc->cur_len;  /* tokens to prefill */
     /* Caller must have set kvc->cur_len = 0 (via kvcache_reset) before
      * calling for layer 0 on a fresh prompt.  We iterate from 0..seq_len-1
      * using the passed-in seq_len from the caller perspective.  To avoid

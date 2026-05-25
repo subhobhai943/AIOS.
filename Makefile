@@ -26,6 +26,7 @@ INITRD  := boot/initrd.img
 # Exclude full notepad.c and ai_chat.c — _simple variants are used instead.
 # Exclude vga_phase51.c — its symbols are already in vga.c.
 C_SRCS  := $(shell find kernel -type f -name '*.c' \
+           ! -path 'kernel/keyboard_gui_hook.c' \
            ! -path 'kernel/apps/notepad.c' \
            ! -path 'kernel/apps/ai_chat.c' \
            ! -path 'kernel/vga_phase51.c')
@@ -71,11 +72,15 @@ iso: $(BUILD)/kernel.bin $(INITRD)
 
 # ── Run in QEMU ────────────────────────────────────────────
 run: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -serial stdio
+	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std \
+		-display gtk,grab-on-hover=on,show-tabs=off \
+		-serial stdio
 
 # ── Debug in QEMU + GDB ────────────────────────────────────
 debug: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -s -S &
+	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std \
+		-display gtk,grab-on-hover=on,show-tabs=off \
+		-s -S &
 	gdb -ex "target remote :1234" -ex "symbol-file $(BUILD)/kernel.bin"
 
 $(BUILD):
