@@ -62,6 +62,9 @@ case "$ACTION" in
             -vga std \
             -display gtk,grab-on-hover=on,show-tabs=off \
             -serial stdio \
+            -machine type=pc,accel=tcg \
+            -device ps2-kbd \
+            -device ps2-mouse \
             -no-reboot \
             -no-shutdown
         ;;
@@ -74,6 +77,9 @@ case "$ACTION" in
             -m 512M \
             -vga std \
             -display gtk,grab-on-hover=on,show-tabs=off \
+            -machine type=pc,accel=tcg \
+            -device ps2-kbd \
+            -device ps2-mouse \
             -s -S \
             -no-reboot \
             -no-shutdown &
