@@ -72,14 +72,27 @@ iso: $(BUILD)/kernel.bin $(INITRD)
 
 # ── Run in QEMU ────────────────────────────────────────────
 run: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std \
+	qemu-system-x86_64 \
+		-cdrom $(ISO) \
+		-m 512M \
+		-vga std \
 		-display gtk,grab-on-hover=on,show-tabs=off \
-		-serial stdio
+		-serial stdio \
+		-machine type=pc,accel=tcg \
+		-device ps2-kbd \
+		-device ps2-mouse
 
 # ── Debug in QEMU + GDB ────────────────────────────────────
 debug: iso
-	qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std \
+	qemu-system-x86_64 \
+		-cdrom $(ISO) \
+		-m 512M \
+		-vga std \
 		-display gtk,grab-on-hover=on,show-tabs=off \
+		-serial stdio \
+		-machine type=pc,accel=tcg \
+		-device ps2-kbd \
+		-device ps2-mouse \
 		-s -S &
 	gdb -ex "target remote :1234" -ex "symbol-file $(BUILD)/kernel.bin"
 
