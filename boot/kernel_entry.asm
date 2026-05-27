@@ -18,6 +18,48 @@
 ; PMM_ALLOC_FAIL on the very first call, and vmm_init() halted
 ; with "out of memory for PML4".
 ;
+; FIX (May 2026) — Problem 1: Safe RSP load in 64-bit mode
+; ---------------------------------------------------------
+; The old code had, inside long_mode_entry (bits 64):
+;
+;     mov rsp, stack_top
+;
+; where stack_top was a label at the end of a local .bss
+; reservation (resb 16384).  NASM resolves a bare symbol in a
+; MOV r64, imm form as a 32-bit zero-extended immediate.  For a
+; kernel loaded at 1 MiB this happens to produce the right RSP
+; value today — but:
+;
+;   (a) The local .bss label SHADOWS the linker-script symbol of
+;       the same name.  The linker script (boot/linker.ld) reserves
+;       the stack inside the .bss section and exports stack_top as
+;       the authoritative address used by kernel_main to compute
+;       _kernel_end, heap placement, and PMM frame marking.  If the
+;       local label wins, RSP points to one address while the C code
+;       thinks the stack is somewhere else — the heap_init() call
+;       immediately after boot can place the heap inside the stack.
+;
+;   (b) If the linker ever places .bss above 4 GB (higher-half
+;       kernel migration), the 32-bit truncation silently corrupts
+;       RSP with zero upper bits.
+;
+; Fix:
+;   - Remove the local stack_bottom / stack_top labels and their
+;     resb reservations from this file entirely.  The linker script
+;     owns the stack allocation.
+;   - Declare stack_top extern so NASM resolves it through the
+;     linker, not as a local symbol.
+;   - Use RIP-relative LEA to load the address:
+;         lea rax, [rel stack_top]
+;         mov rsp, rax
+;     RIP-relative addressing is always 64-bit correct regardless
+;     of where the linker places the symbol.
+;   - The 32-bit "mov esp, stack_top" before long mode is kept as-is:
+;     we are still identity-mapped in physical space at that point,
+;     and the .bss is within the first 64 MB, so a 32-bit address is
+;     fine there.  We now use a local label boot_stack_top in the
+;     32-bit .bss so the linker-script stack_top is not shadowed.
+;
 ; System V AMD64 ABI argument registers:
 ;   arg1 = RDI  ← multiboot2 magic  (was in EAX at entry)
 ;   arg2 = RSI  ← multiboot2 info pointer (was in EBX at entry)
@@ -64,6 +106,11 @@ section .text
 global kernel_entry
 extern kernel_main
 
+; stack_top is defined and exported by boot/linker.ld.
+; Declaring it extern here ensures NASM resolves it through the
+; linker rather than creating a local symbol that would shadow it.
+extern stack_top
+
 kernel_entry:
     cli
 
@@ -77,12 +124,14 @@ kernel_entry:
     mov [mb2_magic_save],   eax
     mov [mb2_info_ptr],     ebx
 
-    ; Temporary stack
-    mov esp, stack_top
+    ; Temporary 32-bit stack — boot_stack_top is a local label
+    ; inside .bss (see below) used ONLY during the 32-bit phase.
+    ; We switch to the linker-script stack_top in long_mode_entry.
+    mov esp, boot_stack_top
 
     ; -------------------------------------------------------
-    ; Build identity-map for first 2 MB via a single 2 MB
-    ; huge page (PML4 → PDPT → PD).
+    ; Build identity-map for first 64 MB via 32× 2 MB huge
+    ; pages (PML4 → PDPT → PD).
     ; -------------------------------------------------------
     mov eax, pdpt_table
     or  eax, 0x03
@@ -144,7 +193,22 @@ long_mode_entry:
     mov gs, ax
     mov ss, ax
 
-    mov rsp, stack_top
+    ; -------------------------------------------------------
+    ; Load the kernel stack pointer safely.
+    ;
+    ; We use RIP-relative LEA (the default for 64-bit NASM when
+    ; you write [rel symbol]) to obtain the address of stack_top
+    ; as a full 64-bit value, regardless of where the linker
+    ; places the .bss section.
+    ;
+    ; DO NOT write:  mov rsp, stack_top
+    ; NASM encodes that as MOV r64, imm32 (zero-extended), which
+    ; truncates the address to 32 bits — correct for a 1 MiB
+    ; kernel today but wrong once .bss moves above 4 GB and a
+    ; shadow of the linker-script symbol.
+    ; -------------------------------------------------------
+    lea  rax, [rel stack_top]
+    mov  rsp, rax
 
     ; Enable SSE/SSE2
     mov rax, cr4
@@ -160,8 +224,8 @@ long_mode_entry:
     ; Use zero-extending 32-bit loads so the upper 32 bits
     ; of RDI and RSI are cleanly zero.
     ; -------------------------------------------------------
-    mov edi, dword [mb2_magic_save]  ; RDI = magic
-    mov esi, dword [mb2_info_ptr]    ; RSI = info ptr
+    mov edi, dword [rel mb2_magic_save]  ; RDI = magic
+    mov esi, dword [rel mb2_info_ptr]    ; RSI = info ptr
 
     call kernel_main
 
@@ -172,7 +236,17 @@ long_mode_entry:
 
 
 ; ============================================================
-; BSS: boot page tables + stack
+; BSS: boot page tables + temporary 32-bit stack
+;
+; NOTE: stack_bottom / stack_top are NOT defined here.
+; They are reserved and exported by boot/linker.ld inside the
+; .bss section.  Defining them here would create a local symbol
+; that shadows the linker-script symbol, causing heap_init() and
+; pmm_init() in kernel_main.c to compute wrong addresses.
+;
+; boot_stack_bottom / boot_stack_top are a SEPARATE 4 KB scratch
+; stack used only during the 32-bit protected-mode phase before
+; long_mode_entry loads the real RSP.
 ; ============================================================
 section .bss
 align 4096
@@ -182,8 +256,8 @@ pdpt_table: resb 4096
 pd_table:   resb 4096
 
 align 16
-stack_bottom:   resb 16384
-stack_top:
+boot_stack_bottom:  resb 4096
+boot_stack_top:
 
 
 ; ============================================================
