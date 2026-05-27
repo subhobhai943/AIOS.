@@ -35,7 +35,7 @@ ASM_SRCS := $(shell find kernel -type f -name '*.asm')
 C_OBJS  := $(patsubst kernel/%.c,  $(BUILD)/%.o, $(C_SRCS))
 A_OBJS  := $(patsubst kernel/%.asm,$(BUILD)/%_asm.o, $(ASM_SRCS))
 
-.PHONY: all clean iso run
+.PHONY: all clean iso run debug
 
 all: $(BUILD)/kernel.bin
 
@@ -68,19 +68,25 @@ iso: $(BUILD)/kernel.bin $(INITRD)
 	cp $(BUILD)/kernel.bin $(BUILD)/isodir/boot/kernel.bin
 	cp $(INITRD) $(BUILD)/isodir/boot/initrd.img
 	cp boot/grub.cfg $(BUILD)/isodir/boot/grub/grub.cfg
-	grub-mkrescue -o $(ISO) $(BUILD)/isodir
+	$(shell command -v grub-mkrescue || command -v grub2-mkrescue) \
+		--compress=none -o $(ISO) $(BUILD)/isodir 2>&1
 
 # ── Run in QEMU ────────────────────────────────────────────
+# -no-reboot and -no-shutdown keep the QEMU window open on a kernel
+# triple-fault instead of the VM silently restarting or closing.
+# -serial stdio routes kernel serial output to the host terminal.
 run: iso
 	qemu-system-x86_64 \
 		-cdrom $(ISO) \
 		-m 512M \
 		-vga std \
-		-display gtk,grab-on-hover=on,show-tabs=off \
 		-serial stdio \
+		-display gtk,grab-on-hover=on,show-tabs=off \
 		-machine type=pc,accel=tcg \
 		-device ps2-kbd \
-		-device ps2-mouse
+		-device ps2-mouse \
+		-no-reboot \
+		-no-shutdown
 
 # ── Debug in QEMU + GDB ────────────────────────────────────
 debug: iso
@@ -88,11 +94,13 @@ debug: iso
 		-cdrom $(ISO) \
 		-m 512M \
 		-vga std \
-		-display gtk,grab-on-hover=on,show-tabs=off \
 		-serial stdio \
+		-display gtk,grab-on-hover=on,show-tabs=off \
 		-machine type=pc,accel=tcg \
 		-device ps2-kbd \
 		-device ps2-mouse \
+		-no-reboot \
+		-no-shutdown \
 		-s -S &
 	gdb -ex "target remote :1234" -ex "symbol-file $(BUILD)/kernel.bin"
 
