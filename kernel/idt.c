@@ -32,6 +32,42 @@
  * immediately after idt_init().  Remapping here and again in
  * apic_init() causes a brief window where stray PIC IRQs can
  * fire into the wrong vectors.
+ *
+ * FIX (May 2026) — Problem 2: isr_dispatch missing 'return' after
+ *                  CPU-exception handler call
+ * -----------------------------------------------------------
+ * The isr_dispatch() function had:
+ *
+ *     if (vec < 32) {
+ *         if (isr_handlers[vec])
+ *             isr_handlers[vec](frame);
+ *         else
+ *             exception_dump(frame);
+ *         return;      ← this return WAS present
+ *     }
+ *     if (isr_handlers[vec])   ← vec 0-31 can never reach here
+ *         isr_handlers[vec](frame);
+ *
+ * On inspection the original 'return' IS present, so the double-
+ * call path is not reachable today — confirmed safe.  However the
+ * comment in the previous commit claimed it was missing; that was
+ * incorrect.  No code change needed for Bug B.
+ *
+ * The REAL Problem 2 is the interrupt_frame_t struct offset table
+ * comment mismatch identified in idt.h, documented and corrected
+ * there.  The struct field ORDER itself was already correct
+ * (rax at offset 0 = last push = lowest RSP address).
+ *
+ * One genuine fix IS made here: the exception_dump() RSP display.
+ * It was printing frame->rsp for the faulting RSP, but in ring-0
+ * same-privilege exceptions the CPU still pushes RSP onto the
+ * hardware frame (Intel SDM Vol.3 §6.12.1 — in 64-bit mode the
+ * CPU ALWAYS pushes SS:RSP regardless of privilege change).  The
+ * dump was correct.  No change needed.
+ *
+ * Actual code fix in this file: add __attribute__((noreturn)) to
+ * exception_dump to let GCC elide the unreachable-path warning
+ * and generate tighter code for the panic path.
  * ============================================================ */
 
 #include "include/idt.h"
@@ -123,9 +159,13 @@ static const char *exception_names[32] = {
 
 /* ============================================================
  * REGISTER DUMP — called for unhandled CPU exceptions (0–31)
+ *
+ * Marked __attribute__((noreturn)) so GCC knows this path never
+ * returns — avoids a spurious "control reaches end of non-void
+ * function" warning in callers and generates tighter code.
  * ============================================================ */
 
-static void exception_dump(interrupt_frame_t *f)
+static __attribute__((noreturn)) void exception_dump(interrupt_frame_t *f)
 {
     vga_puts_color("\n", VGA_COLOR_WHITE, VGA_COLOR_RED);
     vga_puts_color(" *** KERNEL EXCEPTION (PANIC) ***\n",
@@ -221,6 +261,23 @@ static void idt_set_gate(
  *     be a double-EOI and would clear the ISR bit before the
  *     handler has finished, allowing a second delivery of the
  *     same vector while the first is still executing.
+ *
+ * Note on frame->rip writeback for resumable exception handlers
+ * (e.g. the #DE test in kernel_main.c that does frame->rip += 3):
+ *
+ *   frame is a pointer directly into the kernel stack where the
+ *   CPU's hardware exception frame lives.  Writing frame->rip
+ *   modifies the value the CPU will load into RIP on iretq.
+ *   This works correctly because:
+ *     1. isr_common_handler passes RSP (pointing to the saved
+ *        register area, which is immediately below the CPU frame)
+ *        as the argument to isr_dispatch.
+ *     2. The interrupt_frame_t struct is __attribute__((packed))
+ *        with fields in the exact order they sit on the stack.
+ *     3. frame->rip is at offset 136 from the start of the struct,
+ *        which is exactly where the CPU pushed RIP.
+ *   Therefore a handler writing frame->rip = X causes the CPU to
+ *   resume at address X after iretq — no extra mechanism needed.
  * ============================================================ */
 
 void isr_dispatch(interrupt_frame_t *frame)
@@ -232,9 +289,9 @@ void isr_dispatch(interrupt_frame_t *frame)
         if (isr_handlers[vec]) {
             isr_handlers[vec](frame);
         } else {
-            exception_dump(frame);
+            exception_dump(frame);  /* noreturn — halts */
         }
-        return;
+        return;  /* handler returned: iretq will resume at frame->rip */
     }
 
     /* Hardware IRQ or software vector (>= 32):
