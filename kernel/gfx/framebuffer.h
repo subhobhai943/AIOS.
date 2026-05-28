@@ -16,17 +16,25 @@ typedef struct framebuffer {
 /* Returns pointer to the global framebuffer descriptor. */
 framebuffer_t *fb_get(void);
 
-/* Initialise framebuffer descriptor from Multiboot2 info block.
- * mb2_phys is the physical address passed to kernel_main (RSI).
- * Returns true on success, false if no framebuffer tag is found.
- */
+/* Initialise framebuffer descriptor from Multiboot2 info block. */
 bool fb_init_from_multiboot(uint64_t mb2_phys);
 
-/* Primitive drawing operations for 32-bit ARGB framebuffers. */
+/* ── Basic primitives ─────────────────────────────────────── */
 void fb_clear(uint32_t color);
 void fb_put_pixel(uint32_t x, uint32_t y, uint32_t color);
+void fb_blend_pixel(uint32_t x, uint32_t y, uint32_t color, uint8_t alpha);
 void fb_fill_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
 void fb_draw_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h, uint32_t color);
 void fb_blit(uint32_t x, uint32_t y, uint32_t w, uint32_t h, const uint32_t *src);
+
+/* ── Rounded-rectangle primitives (Win7-style soft corners) ── */
+void fb_fill_rounded_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                          uint32_t r, uint32_t color);
+void fb_draw_rounded_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h,
+                          uint32_t r, uint32_t color);
+
+/* ── Circle primitives (taskbar start orb) ─────────────────── */
+void fb_fill_circle(uint32_t cx, uint32_t cy, uint32_t radius, uint32_t color);
+void fb_draw_circle(uint32_t cx, uint32_t cy, uint32_t radius, uint32_t color);
 
 #endif /* FRAMEBUFFER_H */

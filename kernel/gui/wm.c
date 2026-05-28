@@ -1,17 +1,16 @@
 /* kernel/gui/wm.c
- * Window manager thread — Phase 10.4/10.5/10.6
+ * Window manager thread — Phase 10.4/10.5/10.6 / Win7 pass
  *
- * New in this revision:
- *  - Proper title-bar drag and border-resize state machine.
- *  - Desktop background drawn by desktop.c.
- *  - Taskbar drawn by taskbar.c (reserves bottom 40 px).
- *  - Start-menu popup handled here via start_menu.c.
- *  - Mouse cursor drawn as a small arrow on top of everything.
- *  - FIX: dirty-flag — only redraw when state actually changes,
- *    skipping pure MOUSE_MOVE events when no drag is active
- *    (eliminates constant full-screen repaint and flicker).
- *  - FIX: default apps cascade with 24px offset each so windows
- *    don't all spawn stacked at the same position.
+ * New in this revision (Win7 pass):
+ *  - Window frames use fb_draw_rounded_rect (radius 4) for soft corners.
+ *  - Title bar has three Win7-style control buttons:
+ *      close    (right, red)     — hides the window
+ *      maximise (right-1, green) — toggles fullscreen
+ *      minimise (right-2, yellow)— minimises to taskbar
+ *    Each button is 16×14 px, 2 px from the border.
+ *  - MOUSE_DOWN now calls desktop_handle_mouse_down() first so desktop
+ *    icon clicks / double-clicks work.
+ *  - Dirty flag and cascade from previous fix pass are preserved.
  */
 
 #include "gui/wm.h"
@@ -31,48 +30,76 @@
 #include "kthread.h"
 #include "sync.h"
 
+#include <stdbool.h>
+#include <stdint.h>
+
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-#define TITLE_BAR_H   20u   /* pixels */
-#define BORDER_W       4u   /* pixels — resize grip thickness */
-#define TASKBAR_H     40u   /* pixels — reserved at bottom    */
+#define TITLE_BAR_H    20u
+#define BORDER_W        4u
+#define TASKBAR_H      40u
+#define WIN_RADIUS      4u   /* corner rounding radius for window frames */
 
-/* Cascade offset applied to each successive default app window */
-#define CASCADE_STEP  24u
+/* Control button geometry (inside title bar, right-aligned) */
+#define BTN_W          16u
+#define BTN_H          14u
+#define BTN_PAD         2u   /* gap between buttons and from right edge */
+#define BTN_TOP         3u   /* y offset from window top */
+
+/* Button colours */
+#define BTN_CLOSE_COL   0xFFD9534Fu  /* red   */
+#define BTN_MAX_COL     0xFF5CB85Cu  /* green */
+#define BTN_MIN_COL     0xFFF0AD4Eu  /* yellow */
+#define BTN_GLYPH_COL   0xFFFFFFFFu  /* white glyphs */
+
+#define CASCADE_STEP   24u
 
 /* ------------------------------------------------------------------ */
 /* Internal state                                                      */
 /* ------------------------------------------------------------------ */
 
-typedef enum {
-    DRAG_NONE = 0,
-    DRAG_MOVE,
-    DRAG_RESIZE,
-} drag_mode_t;
+typedef enum { DRAG_NONE = 0, DRAG_MOVE, DRAG_RESIZE } drag_mode_t;
 
 typedef struct {
-    framebuffer_t  *fb;
+    framebuffer_t    *fb;
     const gui_font_t *font;
-
-    /* Drag / resize state */
-    drag_mode_t     drag_mode;
-    gui_window_t   *drag_win;
-    int32_t         drag_origin_x;   /* mouse x when drag started */
-    int32_t         drag_origin_y;
-    int32_t         win_origin_x;    /* window x when drag started */
-    int32_t         win_origin_y;
-    uint32_t        win_origin_w;
-    uint32_t        win_origin_h;
-
-    /* FIX: dirty flag — redraw only when something changed */
-    bool            dirty;
+    drag_mode_t       drag_mode;
+    gui_window_t     *drag_win;
+    int32_t           drag_origin_x;
+    int32_t           drag_origin_y;
+    int32_t           win_origin_x;
+    int32_t           win_origin_y;
+    uint32_t          win_origin_w;
+    uint32_t          win_origin_h;
+    bool              dirty;
 } wm_state_t;
 
 /* ------------------------------------------------------------------ */
-/* Title-bar / border geometry helpers                                  */
+/* Control-button geometry helpers                                     */
 /* ------------------------------------------------------------------ */
+
+/* Right edge of button k (k=0: close, k=1: max, k=2: min) */
+static inline int32_t btn_x(const gui_window_t *w, uint32_t k)
+{
+    return (int32_t)(w->x + w->width)
+           - (int32_t)BTN_PAD
+           - (int32_t)((k + 1u) * (BTN_W + BTN_PAD));
+}
+static inline int32_t btn_y(const gui_window_t *w)
+{
+    return (int32_t)w->y + (int32_t)BTN_TOP;
+}
+
+static bool point_in_btn(const gui_window_t *w, uint32_t k,
+                         int32_t px, int32_t py)
+{
+    int32_t bx = btn_x(w, k);
+    int32_t by = btn_y(w);
+    return px >= bx && px < bx + (int32_t)BTN_W &&
+           py >= by && py < by + (int32_t)BTN_H;
+}
 
 static bool point_in_title_bar(const gui_window_t *w, int32_t px, int32_t py)
 {
@@ -82,15 +109,30 @@ static bool point_in_title_bar(const gui_window_t *w, int32_t px, int32_t py)
 
 static bool point_in_border(const gui_window_t *w, int32_t px, int32_t py)
 {
-    /* bottom-right corner resize grip */
-    int32_t rx = (int32_t)(w->x + w->width  - (int32_t)BORDER_W);
-    int32_t ry = (int32_t)(w->y + w->height - (int32_t)BORDER_W);
+    int32_t rx = (int32_t)(w->x + w->width  - BORDER_W);
+    int32_t ry = (int32_t)(w->y + w->height - BORDER_W);
     return px >= rx && px < (int32_t)(w->x + w->width) &&
            py >= ry && py < (int32_t)(w->y + w->height);
 }
 
 /* ------------------------------------------------------------------ */
-/* Window frame renderer                                               */
+/* Draw a single control button with glyph                            */
+/* ------------------------------------------------------------------ */
+
+static void draw_btn(framebuffer_t *fb, const gui_font_t *font,
+                     int32_t bx, int32_t by,
+                     uint32_t bg, const char *glyph)
+{
+    fb_fill_rounded_rect((uint32_t)bx, (uint32_t)by, BTN_W, BTN_H, 2u, bg);
+    if (font && glyph) {
+        uint32_t gx = (uint32_t)bx + (BTN_W - (font->width ? font->width : 8u)) / 2u;
+        uint32_t gy = (uint32_t)by + (BTN_H - (font->height ? font->height : 8u)) / 2u;
+        font_draw_string(fb, font, gx, gy, glyph, BTN_GLYPH_COL, bg);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Window frame renderer (rounded + control buttons)                  */
 /* ------------------------------------------------------------------ */
 
 static void wm_draw_window_frame(const gui_window_t *win,
@@ -105,68 +147,74 @@ static void wm_draw_window_frame(const gui_window_t *win,
     uint32_t y = (uint32_t)win->y;
     uint32_t w = win->width;
     uint32_t h = win->height;
-    if (w < 20u || h < TITLE_BAR_H + 4u) return;
+    if (w < 60u || h < TITLE_BAR_H + 4u) return;
 
-    uint32_t frame_col  = win->is_active ? UI_COLOR_ACCENT : UI_COLOR_WINDOW_BORDER;
-    uint32_t title_bg   = win->is_active ? UI_COLOR_WINDOW_TITLE_ACTIVE_BG
-                                         : UI_COLOR_WINDOW_TITLE_INACTIVE_BG;
-    uint32_t title_fg   = UI_COLOR_TEXT_FG;
-    uint32_t body_bg    = UI_COLOR_WINDOW_BG;
+    uint32_t frame_col = win->is_active ? UI_COLOR_ACCENT : UI_COLOR_WINDOW_BORDER;
+    uint32_t title_bg  = win->is_active ? UI_COLOR_WINDOW_TITLE_ACTIVE_BG
+                                        : UI_COLOR_WINDOW_TITLE_INACTIVE_BG;
+    uint32_t body_bg   = UI_COLOR_WINDOW_BG;
 
-    /* Outer border */
-    fb_draw_rect(x, y, w, h, frame_col);
+    /* Outer rounded border */
+    fb_draw_rounded_rect(x, y, w, h, WIN_RADIUS, frame_col);
 
-    /* Title bar */
+    /* Title bar fill */
     fb_fill_rect(x + 1u, y + 1u, w - 2u, TITLE_BAR_H, title_bg);
 
-    /* Body */
+    /* Body fill */
     fb_fill_rect(x + 1u, y + 1u + TITLE_BAR_H, w - 2u,
                  h - TITLE_BAR_H - 2u, body_bg);
 
-    /* Title text */
+    /* Title text (leave room for 3 buttons on the right) */
     if (font && win->title) {
-        font_draw_string_centered(fb, font, (int32_t)x + 4, (int32_t)y + 2,
-                                  w - 8u, win->title, title_fg, title_bg);
+        uint32_t title_max_w = w > (3u * (BTN_W + BTN_PAD) + 12u + 8u)
+                               ? w - (3u * (BTN_W + BTN_PAD) + 12u + 8u)
+                               : 0u;
+        if (title_max_w > 0u) {
+            font_draw_string_centered(fb, font,
+                                      (int32_t)x + 4, (int32_t)y + 2,
+                                      title_max_w,
+                                      win->title,
+                                      UI_COLOR_TEXT_FG, title_bg);
+        }
     }
 
-    /* Resize grip — small darker square at bottom-right */
+    /* ---- Control buttons: close (k=0), max (k=1), min (k=2) ---- */
+    draw_btn(fb, font, btn_x(win, 0), btn_y(win), BTN_CLOSE_COL, "x");
+    draw_btn(fb, font, btn_x(win, 1), btn_y(win), BTN_MAX_COL,   "+");
+    draw_btn(fb, font, btn_x(win, 2), btn_y(win), BTN_MIN_COL,   "-");
+
+    /* Resize grip */
     fb_fill_rect(x + w - BORDER_W, y + h - BORDER_W,
                  BORDER_W, BORDER_W, frame_col);
 }
 
 /* ------------------------------------------------------------------ */
-/* Cursor renderer (tiny software arrow)                               */
+/* Cursor renderer                                                     */
 /* ------------------------------------------------------------------ */
 
 static void wm_draw_cursor(framebuffer_t *fb, int32_t cx, int32_t cy)
 {
     (void)fb;
-
-    /* 8-pixel tall left-pointing filled triangle arrow */
-    static const uint8_t arrow[8] = { 1,2,3,4,5,6,7,8 };
+    static const uint8_t arrow[12] = {1,2,3,4,5,6,7,6,5,4,3,2};
     uint32_t col = UI_COLOR_TEXT_FG;
-    for (int row = 0; row < 8; row++) {
-        for (int col2 = 0; col2 < (int)arrow[row]; col2++) {
-            fb_put_pixel((uint32_t)(cx + col2), (uint32_t)(cy + row), col);
-        }
-    }
+    for (int row = 0; row < 12; row++)
+        for (int c = 0; c < (int)arrow[row]; c++)
+            fb_put_pixel((uint32_t)(cx + c), (uint32_t)(cy + row), col);
 }
 
 /* ------------------------------------------------------------------ */
-/* Full redraw                                                          */
+/* Full redraw                                                         */
 /* ------------------------------------------------------------------ */
 
 static void wm_redraw_all(wm_state_t *st)
 {
-    framebuffer_t *fb = st->fb;
+    framebuffer_t    *fb   = st->fb;
     const gui_font_t *font = st->font;
 
-    /* 1. Desktop background */
     desktop_draw(fb, font);
 
-    /* 2. Windows — back to front */
-    gui_window_t *win = gui_window_list_head();
-    gui_window_t *tail = win;
+    /* Windows back-to-front */
+    gui_window_t *tail = gui_window_list_head();
     while (tail && tail->next) tail = tail->next;
     gui_window_t *cur = tail;
     while (cur) {
@@ -178,15 +226,11 @@ static void wm_redraw_all(wm_state_t *st)
         cur = cur->prev;
     }
 
-    /* 3. Taskbar (on top of windows, at bottom) */
     taskbar_draw(fb, font);
 
-    /* 4. Start menu if open */
-    if (start_menu_is_open()) {
+    if (start_menu_is_open())
         start_menu_draw(fb, font);
-    }
 
-    /* 5. Mouse cursor on top of everything */
     gui_mouse_state_t ms;
     gui_input_get_mouse_state(&ms);
     wm_draw_cursor(fb, ms.x, ms.y);
@@ -194,7 +238,10 @@ static void wm_redraw_all(wm_state_t *st)
     st->dirty = false;
 }
 
-/* FIX: open default apps with cascaded positions so they don't pile up */
+/* ------------------------------------------------------------------ */
+/* Default app cascade                                                 */
+/* ------------------------------------------------------------------ */
+
 static void wm_open_default_apps(void)
 {
     terminal_gui_open();
@@ -203,16 +250,12 @@ static void wm_open_default_apps(void)
     ai_chat_open();
     notepad_open(0);
 
-    /* Cascade: walk the window list and offset each window by CASCADE_STEP */
     uint32_t step = 0u;
-    gui_window_t *w = gui_window_list_head();
-    /* Find tail (last opened = back of list) */
-    gui_window_t *tail = w;
+    gui_window_t *tail = gui_window_list_head();
     while (tail && tail->next) tail = tail->next;
-    /* Iterate back-to-front (order opened) and apply increasing offsets */
     gui_window_t *cur = tail;
     while (cur) {
-        cur->x = (int32_t)(60u + step * CASCADE_STEP);
+        cur->x = (int32_t)(80u + step * CASCADE_STEP);
         cur->y = (int32_t)(40u + step * CASCADE_STEP);
         step++;
         cur = cur->prev;
@@ -220,32 +263,30 @@ static void wm_open_default_apps(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Event dispatch                                                       */
+/* Event dispatch                                                      */
 /* ------------------------------------------------------------------ */
 
 static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
 {
-    framebuffer_t *fb = st->fb;
+    framebuffer_t    *fb   = st->fb;
     const gui_font_t *font = st->font;
 
-    /* ---- Start menu consumes events when open ---- */
     if (start_menu_is_open()) {
         start_menu_handle_event(ev, fb, font);
         st->dirty = true;
         return;
     }
 
+    /* ---- Left mouse button down ---- */
     if (ev->type == GUI_EVENT_MOUSE_DOWN &&
         (ev->buttons & GUI_MOUSE_BUTTON_LEFT)) {
 
         st->dirty = true;
 
-        /* Check taskbar first (bottom strip) */
-        if (taskbar_handle_mouse_down(ev->x, ev->y, fb, font)) {
+        if (taskbar_handle_mouse_down(ev->x, ev->y, fb, font))
             return;
-        }
 
-        /* Hit-test windows from top (head) to bottom */
+        /* Hit-test windows from front to back */
         gui_window_t *win = gui_window_list_head();
         gui_window_t *hit = 0;
         while (win) {
@@ -258,35 +299,81 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             win = win->next;
         }
 
-        /* Deactivate previously-active window */
-        gui_window_t *w = gui_window_list_head();
-        while (w) { w->is_active = false; w = w->next; }
-
         if (hit) {
+            /* Deactivate all, bring hit to front */
+            gui_window_t *w = gui_window_list_head();
+            while (w) { w->is_active = false; w = w->next; }
             gui_window_bring_to_front(hit);
             hit->is_active = true;
 
+            /* ---- Control button hit-test ---- */
+            if (point_in_btn(hit, 0, ev->x, ev->y)) {
+                /* Close — hide the window */
+                hit->state = GUI_WINDOW_STATE_HIDDEN;
+                return;
+            }
+            if (point_in_btn(hit, 1, ev->x, ev->y)) {
+                /* Maximise — toggle between normal and fullscreen */
+                static int32_t  saved_x, saved_y;
+                static uint32_t saved_w, saved_h;
+                framebuffer_t *fb2 = fb_get();
+                if (hit->x == 0 && hit->y == 0 &&
+                    hit->width  == fb2->width &&
+                    hit->height == fb2->height - TASKBAR_H) {
+                    /* Already maximised — restore */
+                    hit->x      = saved_x;
+                    hit->y      = saved_y;
+                    hit->width  = saved_w;
+                    hit->height = saved_h;
+                } else {
+                    saved_x = hit->x;  saved_y = hit->y;
+                    saved_w = hit->width; saved_h = hit->height;
+                    hit->x = 0; hit->y = 0;
+                    hit->width  = fb2->width;
+                    hit->height = fb2->height - TASKBAR_H;
+                }
+                return;
+            }
+            if (point_in_btn(hit, 2, ev->x, ev->y)) {
+                /* Minimise */
+                hit->state     = GUI_WINDOW_STATE_MINIMIZED;
+                hit->is_active = false;
+                return;
+            }
+
+            /* Resize grip */
             if (point_in_border(hit, ev->x, ev->y)) {
-                st->drag_mode    = DRAG_RESIZE;
-                st->drag_win     = hit;
+                st->drag_mode     = DRAG_RESIZE;
+                st->drag_win      = hit;
                 st->drag_origin_x = ev->x;
                 st->drag_origin_y = ev->y;
                 st->win_origin_w  = hit->width;
                 st->win_origin_h  = hit->height;
-            } else if (point_in_title_bar(hit, ev->x, ev->y)) {
-                st->drag_mode    = DRAG_MOVE;
-                st->drag_win     = hit;
+                return;
+            }
+
+            /* Title-bar drag */
+            if (point_in_title_bar(hit, ev->x, ev->y)) {
+                st->drag_mode     = DRAG_MOVE;
+                st->drag_win      = hit;
                 st->drag_origin_x = ev->x;
                 st->drag_origin_y = ev->y;
                 st->win_origin_x  = hit->x;
                 st->win_origin_y  = hit->y;
-            } else {
-                if (hit->handle_event) hit->handle_event(hit, ev);
+                return;
             }
+
+            /* Client-area click */
+            if (hit->handle_event) hit->handle_event(hit, ev);
+            return;
         }
+
+        /* No window hit — forward to desktop (icon click / deselect) */
+        desktop_handle_mouse_down(ev->x, ev->y, fb, font);
         return;
     }
 
+    /* ---- Mouse move ---- */
     if (ev->type == GUI_EVENT_MOUSE_MOVE) {
         if (st->drag_mode == DRAG_MOVE && st->drag_win) {
             int32_t dx = ev->x - st->drag_origin_x;
@@ -296,28 +383,27 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             if (st->drag_win->y < 0) st->drag_win->y = 0;
             if (st->drag_win->y >= (int32_t)(fb->height - TASKBAR_H))
                 st->drag_win->y = (int32_t)(fb->height - TASKBAR_H) - 1;
-            st->dirty = true;   /* dragging — must redraw */
+            st->dirty = true;
         } else if (st->drag_mode == DRAG_RESIZE && st->drag_win) {
-            int32_t dx = ev->x - st->drag_origin_x;
-            int32_t dy = ev->y - st->drag_origin_y;
-            int32_t new_w = (int32_t)st->win_origin_w + dx;
-            int32_t new_h = (int32_t)st->win_origin_h + dy;
-            if (new_w < 80)  new_w = 80;
-            if (new_h < 40)  new_h = 40;
-            st->drag_win->width  = (uint32_t)new_w;
-            st->drag_win->height = (uint32_t)new_h;
-            st->dirty = true;   /* resizing — must redraw */
+            int32_t dx  = ev->x - st->drag_origin_x;
+            int32_t dy  = ev->y - st->drag_origin_y;
+            int32_t n_w = (int32_t)st->win_origin_w + dx;
+            int32_t n_h = (int32_t)st->win_origin_h + dy;
+            if (n_w < 80)  n_w = 80;
+            if (n_h < 40)  n_h = 40;
+            st->drag_win->width  = (uint32_t)n_w;
+            st->drag_win->height = (uint32_t)n_h;
+            st->dirty = true;
         }
-        /* FIX: if no drag is active, mouse move does NOT set dirty —
-           no need to repaint the entire screen just because the mouse moved */
         return;
     }
 
+    /* ---- Mouse up ---- */
     if (ev->type == GUI_EVENT_MOUSE_UP) {
         if (st->drag_mode != DRAG_NONE) {
             st->drag_mode = DRAG_NONE;
             st->drag_win  = 0;
-            st->dirty = true;
+            st->dirty     = true;
         }
         gui_window_t *head = gui_window_list_head();
         if (head && head->is_active && head->handle_event)
@@ -325,7 +411,7 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
         return;
     }
 
-    /* Key events — forward to active window */
+    /* ---- Key events ---- */
     if (ev->type == GUI_EVENT_KEY_DOWN || ev->type == GUI_EVENT_KEY_UP) {
         gui_window_t *head = gui_window_list_head();
         if (head && head->is_active && head->handle_event) {
@@ -336,13 +422,12 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
 }
 
 /* ------------------------------------------------------------------ */
-/* WM thread entry                                                      */
+/* WM thread                                                           */
 /* ------------------------------------------------------------------ */
 
 static void wm_thread_main(void *arg)
 {
     (void)arg;
-
     framebuffer_t *fb = fb_get();
     if (!fb) return;
 
@@ -355,18 +440,10 @@ static void wm_thread_main(void *arg)
     start_menu_init();
     wm_open_default_apps();
 
-    wm_state_t st;
-    st.fb           = fb;
-    st.font         = font;
-    st.drag_mode    = DRAG_NONE;
-    st.drag_win     = 0;
-    st.drag_origin_x = 0;
-    st.drag_origin_y = 0;
-    st.win_origin_x  = 0;
-    st.win_origin_y  = 0;
-    st.win_origin_w  = 0;
-    st.win_origin_h  = 0;
-    st.dirty         = true;   /* force initial draw */
+    wm_state_t st = {0};
+    st.fb    = fb;
+    st.font  = font;
+    st.dirty = true;
 
     wm_redraw_all(&st);
 
@@ -374,13 +451,8 @@ static void wm_thread_main(void *arg)
     for (;;) {
         gui_input_wait_event(&ev);
         wm_handle_event(&st, &ev);
-        /* FIX: only redraw when something actually changed */
-        if (st.dirty) {
-            wm_redraw_all(&st);
-        }
+        if (st.dirty) wm_redraw_all(&st);
     }
-
-    return;
 }
 
 void gui_wm_start(void)
