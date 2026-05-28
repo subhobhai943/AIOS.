@@ -7,6 +7,11 @@
  *  - Taskbar drawn by taskbar.c (reserves bottom 40 px).
  *  - Start-menu popup handled here via start_menu.c.
  *  - Mouse cursor drawn as a small arrow on top of everything.
+ *  - FIX: dirty-flag — only redraw when state actually changes,
+ *    skipping pure MOUSE_MOVE events when no drag is active
+ *    (eliminates constant full-screen repaint and flicker).
+ *  - FIX: default apps cascade with 24px offset each so windows
+ *    don't all spawn stacked at the same position.
  */
 
 #include "gui/wm.h"
@@ -34,6 +39,9 @@
 #define BORDER_W       4u   /* pixels — resize grip thickness */
 #define TASKBAR_H     40u   /* pixels — reserved at bottom    */
 
+/* Cascade offset applied to each successive default app window */
+#define CASCADE_STEP  24u
+
 /* ------------------------------------------------------------------ */
 /* Internal state                                                      */
 /* ------------------------------------------------------------------ */
@@ -57,6 +65,9 @@ typedef struct {
     int32_t         win_origin_y;
     uint32_t        win_origin_w;
     uint32_t        win_origin_h;
+
+    /* FIX: dirty flag — redraw only when something changed */
+    bool            dirty;
 } wm_state_t;
 
 /* ------------------------------------------------------------------ */
@@ -154,13 +165,9 @@ static void wm_redraw_all(wm_state_t *st)
     desktop_draw(fb, font);
 
     /* 2. Windows — back to front */
-    /* Collect list tail first (back is last node in list) */
     gui_window_t *win = gui_window_list_head();
-    /* list is front-to-back, draw back-to-front = reverse iteration */
-    /* Find tail */
     gui_window_t *tail = win;
     while (tail && tail->next) tail = tail->next;
-    /* Draw from tail to head */
     gui_window_t *cur = tail;
     while (cur) {
         if (cur->state != GUI_WINDOW_STATE_MINIMIZED &&
@@ -183,8 +190,11 @@ static void wm_redraw_all(wm_state_t *st)
     gui_mouse_state_t ms;
     gui_input_get_mouse_state(&ms);
     wm_draw_cursor(fb, ms.x, ms.y);
+
+    st->dirty = false;
 }
 
+/* FIX: open default apps with cascaded positions so they don't pile up */
 static void wm_open_default_apps(void)
 {
     terminal_gui_open();
@@ -192,6 +202,21 @@ static void wm_open_default_apps(void)
     settings_open();
     ai_chat_open();
     notepad_open(0);
+
+    /* Cascade: walk the window list and offset each window by CASCADE_STEP */
+    uint32_t step = 0u;
+    gui_window_t *w = gui_window_list_head();
+    /* Find tail (last opened = back of list) */
+    gui_window_t *tail = w;
+    while (tail && tail->next) tail = tail->next;
+    /* Iterate back-to-front (order opened) and apply increasing offsets */
+    gui_window_t *cur = tail;
+    while (cur) {
+        cur->x = (int32_t)(60u + step * CASCADE_STEP);
+        cur->y = (int32_t)(40u + step * CASCADE_STEP);
+        step++;
+        cur = cur->prev;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -206,11 +231,14 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
     /* ---- Start menu consumes events when open ---- */
     if (start_menu_is_open()) {
         start_menu_handle_event(ev, fb, font);
+        st->dirty = true;
         return;
     }
 
     if (ev->type == GUI_EVENT_MOUSE_DOWN &&
         (ev->buttons & GUI_MOUSE_BUTTON_LEFT)) {
+
+        st->dirty = true;
 
         /* Check taskbar first (bottom strip) */
         if (taskbar_handle_mouse_down(ev->x, ev->y, fb, font)) {
@@ -239,7 +267,6 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             hit->is_active = true;
 
             if (point_in_border(hit, ev->x, ev->y)) {
-                /* Begin resize */
                 st->drag_mode    = DRAG_RESIZE;
                 st->drag_win     = hit;
                 st->drag_origin_x = ev->x;
@@ -247,7 +274,6 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
                 st->win_origin_w  = hit->width;
                 st->win_origin_h  = hit->height;
             } else if (point_in_title_bar(hit, ev->x, ev->y)) {
-                /* Begin move */
                 st->drag_mode    = DRAG_MOVE;
                 st->drag_win     = hit;
                 st->drag_origin_x = ev->x;
@@ -255,7 +281,6 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
                 st->win_origin_x  = hit->x;
                 st->win_origin_y  = hit->y;
             } else {
-                /* Client area click — forward to window */
                 if (hit->handle_event) hit->handle_event(hit, ev);
             }
         }
@@ -268,10 +293,10 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             int32_t dy = ev->y - st->drag_origin_y;
             st->drag_win->x = st->win_origin_x + dx;
             st->drag_win->y = st->win_origin_y + dy;
-            /* Clamp: don't drag title bar off screen top */
             if (st->drag_win->y < 0) st->drag_win->y = 0;
             if (st->drag_win->y >= (int32_t)(fb->height - TASKBAR_H))
                 st->drag_win->y = (int32_t)(fb->height - TASKBAR_H) - 1;
+            st->dirty = true;   /* dragging — must redraw */
         } else if (st->drag_mode == DRAG_RESIZE && st->drag_win) {
             int32_t dx = ev->x - st->drag_origin_x;
             int32_t dy = ev->y - st->drag_origin_y;
@@ -281,7 +306,10 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             if (new_h < 40)  new_h = 40;
             st->drag_win->width  = (uint32_t)new_w;
             st->drag_win->height = (uint32_t)new_h;
+            st->dirty = true;   /* resizing — must redraw */
         }
+        /* FIX: if no drag is active, mouse move does NOT set dirty —
+           no need to repaint the entire screen just because the mouse moved */
         return;
     }
 
@@ -289,8 +317,8 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
         if (st->drag_mode != DRAG_NONE) {
             st->drag_mode = DRAG_NONE;
             st->drag_win  = 0;
+            st->dirty = true;
         }
-        /* Also forward to focused window */
         gui_window_t *head = gui_window_list_head();
         if (head && head->is_active && head->handle_event)
             head->handle_event(head, ev);
@@ -300,8 +328,10 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
     /* Key events — forward to active window */
     if (ev->type == GUI_EVENT_KEY_DOWN || ev->type == GUI_EVENT_KEY_UP) {
         gui_window_t *head = gui_window_list_head();
-        if (head && head->is_active && head->handle_event)
+        if (head && head->is_active && head->handle_event) {
             head->handle_event(head, ev);
+            st->dirty = true;
+        }
     }
 }
 
@@ -336,6 +366,7 @@ static void wm_thread_main(void *arg)
     st.win_origin_y  = 0;
     st.win_origin_w  = 0;
     st.win_origin_h  = 0;
+    st.dirty         = true;   /* force initial draw */
 
     wm_redraw_all(&st);
 
@@ -343,7 +374,10 @@ static void wm_thread_main(void *arg)
     for (;;) {
         gui_input_wait_event(&ev);
         wm_handle_event(&st, &ev);
-        wm_redraw_all(&st);
+        /* FIX: only redraw when something actually changed */
+        if (st.dirty) {
+            wm_redraw_all(&st);
+        }
     }
 
     return;

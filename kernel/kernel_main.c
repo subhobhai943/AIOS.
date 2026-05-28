@@ -27,6 +27,7 @@
 #include "gfx/font.h"
 #include "gui/input.h"
 #include "gui/input_mode.h"
+#include "gui/input_wiring.h"   /* FIX: was missing — needed for gui_wiring_activate() */
 #include "gui/wm.h"
 #include "shell/shell.h"
 
@@ -308,8 +309,9 @@ void kernel_main(uint32_t magic, uint32_t addr)
     if (gui_framebuffer_ready) {
         gui_input_init(fb_get()->width, fb_get()->height);
         gui_input_enable();
+        gui_wiring_activate();   /* FIX: wire keyboard/mouse IRQs into GUI event queue */
         gui_wm_start();
-        print_ok("GUI input enabled and WM thread started");
+        print_ok("GUI input wired and WM thread started");
     } else {
         print_ok("VGA text mode active — type 'startx' to launch GUI");
     }
