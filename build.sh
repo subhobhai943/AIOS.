@@ -15,6 +15,9 @@
 
 set -e
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$SCRIPT_DIR"
+
 ACTION=${1:-run}
 
 # ── Detect cross-compiler ─────────────────────────────────
@@ -79,43 +82,14 @@ case "$ACTION" in
     run)
         check_crosscompiler
         check_qemu
-        make iso
         echo "[*] Launching AIOS in QEMU..."
-        # -no-reboot  : keep QEMU open if the kernel triple-faults
-        # -no-shutdown: prevent VM auto-poweroff on halt instruction
-        # -serial stdio: pipe kernel serial output to this terminal
-        qemu-system-x86_64 \
-            -cdrom aios.iso \
-            -m 512M \
-            -vga std \
-            -serial stdio \
-            -display gtk,grab-on-hover=on,show-tabs=off \
-            -machine type=pc,accel=tcg \
-            -device ps2-kbd \
-            -device ps2-mouse \
-            -no-reboot \
-            -no-shutdown
+        make run
         ;;
     debug)
         check_crosscompiler
         check_qemu
-        make iso
-        echo "[*] Starting QEMU with GDB stub on :1234..."
-        qemu-system-x86_64 \
-            -cdrom aios.iso \
-            -m 512M \
-            -vga std \
-            -serial stdio \
-            -display gtk,grab-on-hover=on,show-tabs=off \
-            -machine type=pc,accel=tcg \
-            -device ps2-kbd \
-            -device ps2-mouse \
-            -no-reboot \
-            -no-shutdown \
-            -s -S &
-        gdb -ex "target remote :1234" \
-            -ex "symbol-file build/kernel.bin" \
-            -ex "break kernel_main"
+        echo "[*] Starting AIOS in QEMU with GDB stub on :1234..."
+        make debug
         ;;
     *)
         echo "Usage: $0 [deps|iso|run|debug|clean]"

@@ -16,6 +16,16 @@ LDFLAGS := -T boot/linker.ld -nostdlib
 
 ASFLAGS_BIN  := -f bin
 ASFLAGS_ELF  := -f elf64
+QEMU    ?= qemu-system-x86_64
+QEMUFLAGS = \
+	-cdrom $(ISO) \
+	-m 512M \
+	-vga std \
+	-serial stdio \
+	-display gtk,grab-on-hover=on,show-tabs=off \
+	-machine type=pc,accel=tcg \
+	-no-reboot \
+	-no-shutdown
 
 # Directories
 BUILD   := build
@@ -76,32 +86,11 @@ iso: $(BUILD)/kernel.bin $(INITRD)
 # triple-fault instead of the VM silently restarting or closing.
 # -serial stdio routes kernel serial output to the host terminal.
 run: iso
-	qemu-system-x86_64 \
-		-cdrom $(ISO) \
-		-m 512M \
-		-vga std \
-		-serial stdio \
-		-display gtk,grab-on-hover=on,show-tabs=off \
-		-machine type=pc,accel=tcg \
-		-device ps2-kbd \
-		-device ps2-mouse \
-		-no-reboot \
-		-no-shutdown
+	$(QEMU) $(QEMUFLAGS)
 
 # ── Debug in QEMU + GDB ────────────────────────────────────
 debug: iso
-	qemu-system-x86_64 \
-		-cdrom $(ISO) \
-		-m 512M \
-		-vga std \
-		-serial stdio \
-		-display gtk,grab-on-hover=on,show-tabs=off \
-		-machine type=pc,accel=tcg \
-		-device ps2-kbd \
-		-device ps2-mouse \
-		-no-reboot \
-		-no-shutdown \
-		-s -S &
+	$(QEMU) $(QEMUFLAGS) -s -S &
 	gdb -ex "target remote :1234" -ex "symbol-file $(BUILD)/kernel.bin"
 
 $(BUILD):
