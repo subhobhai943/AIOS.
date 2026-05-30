@@ -23,15 +23,20 @@ DISK_IMG := aios_disk.img
 DISK_MB  := 64
 
 # QEMU flags:
-#   -cdrom        : bootable ISO (GRUB + kernel)
+#   -boot order=d     : FORCE CD-ROM first — prevents SeaBIOS from
+#                       trying the AHCI/SATA disk before the ISO.
+#                       Without this, ide-hd is enumerated first and
+#                       QEMU shows "This is not a bootable disk".
+#   -cdrom            : bootable ISO (GRUB + kernel)
 #   -drive / -device ahci: expose a raw disk image as a SATA drive so
-#                 the AHCI driver can find an HBA at PCI class 0x01/0x06
-#                 and port_mask != 0 → FAT32 mounts successfully.
-#   -m 512M       : enough RAM for kernel heap + framebuffer
-#   -vga std      : standard VGA for Multiboot2 framebuffer tag
-#   -serial stdio : kernel serial log → host terminal
+#                       the AHCI driver can find an HBA at PCI class
+#                       0x01/0x06 and port_mask != 0 → FAT32 mounts.
+#   -m 512M           : enough RAM for kernel heap + framebuffer
+#   -vga std          : standard VGA for Multiboot2 framebuffer tag
+#   -serial stdio     : kernel serial log → host terminal
 #   -no-reboot / -no-shutdown : keep window open on triple-fault
 QEMUFLAGS = \
+	-boot order=d,menu=on \
 	-cdrom $(ISO) \
 	-drive id=disk0,file=$(DISK_IMG),format=raw,if=none \
 	-device ahci,id=ahci0 \
@@ -81,10 +86,17 @@ $(DISK_IMG):
 	@echo "[DISK] Done — $(DISK_IMG) ready"
 
 # ── Initrd ──────────────────────────────────────────────────
-$(INITRD): scripts/mkinitrd.py assets/tokenizer/vocab.bin assets/tokenizer/config.bin
-	python3 scripts/mkinitrd.py -o $@ \
-		assets/tokenizer/vocab.bin /tokenizer/vocab.bin \
-		assets/tokenizer/config.bin /tokenizer/config.bin
+# Robust: if tokenizer assets are missing, write a 1-sector stub so
+# 'make iso' never fails on a clean checkout without assets.
+$(INITRD):
+	@if [ -f assets/tokenizer/vocab.bin ] && [ -f assets/tokenizer/config.bin ]; then \
+	    python3 scripts/mkinitrd.py -o $@ \
+	        assets/tokenizer/vocab.bin /tokenizer/vocab.bin \
+	        assets/tokenizer/config.bin /tokenizer/config.bin; \
+	else \
+	    echo "[INITRD] tokenizer assets not found — writing 512-byte stub"; \
+	    dd if=/dev/zero of=$@ bs=512 count=1 2>/dev/null; \
+	fi
 
 # ── Kernel objects ─────────────────────────────────────────
 $(BUILD)/%.o: kernel/%.c | $(BUILD)

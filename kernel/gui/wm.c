@@ -2,9 +2,12 @@
  * Window manager thread — Phase 10.4/10.5/10.6 / Win7 pass
  *
  * Fix pass (Phase 11 bugfix):
- *  - MOUSE_MOVE only marks dirty when a drag is active (stops dancing).
- *  - sched_sleep(8) throttle in the main loop prevents full-speed redraws.
- *  - wm_open_default_apps now opens only terminal + explorer on boot.
+ *  - MOUSE_MOVE always marks dirty so cursor tracks the pointer
+ *    smoothly (previously cursor froze when no drag was active).
+ *  - sched_sleep(8) throttle caps redraws at ~120 fps.
+ *  - wm_open_default_apps cascade now walks head→next (not tail→prev)
+ *    so both windows get correctly staggered positions.
+ *  - wm_open_default_apps opens only terminal + explorer on boot.
  */
 
 #include "gui/wm.h"
@@ -50,7 +53,7 @@
 #define CASCADE_STEP   24u
 
 /* Redraw throttle: minimum ms between full redraws when dirty. */
-#define WM_FRAME_MS     8u   /* ~120 fps cap — eliminates spin-redraw jitter */
+#define WM_FRAME_MS     8u   /* ~120 fps cap */
 
 /* ------------------------------------------------------------------ */
 /* Internal state                                                      */
@@ -235,15 +238,20 @@ static void wm_open_default_apps(void)
     terminal_gui_open();
     explorer_open(0);
 
+    /*
+     * FIX: walk head→next (front-to-back) not tail→prev.
+     * gui_window_list_head() returns the most-recently-created window
+     * (the front/top of the stack).  prev from the tail is NULL, so
+     * the old loop only ever ran once, leaving all windows stacked at
+     * the same (60,50) position.
+     */
     uint32_t step = 0u;
-    gui_window_t *tail = gui_window_list_head();
-    while (tail && tail->next) tail = tail->next;
-    gui_window_t *cur = tail;
+    gui_window_t *cur = gui_window_list_head();
     while (cur) {
         cur->x = (int32_t)(60u + step * CASCADE_STEP);
-        cur->y = (int32_t)(50u + step * CASCADE_STEP);
+        cur->y = (int32_t)(60u + step * CASCADE_STEP);
         step++;
-        cur = cur->prev;
+        cur = cur->next;
     }
 }
 
@@ -348,10 +356,12 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
     }
 
     /* ---- Mouse move ----
-     * FIX: only mark dirty (and thus redraw) when actively dragging.
-     * Previously every MOUSE_MOVE triggered wm_redraw_all, causing the
-     * visible window "dancing" at full PIT speed. */
+     * FIX: always mark dirty on MOUSE_MOVE so the cursor visually
+     * follows the pointer even when no drag is active.  The
+     * sched_sleep(WM_FRAME_MS) throttle after each redraw keeps CPU
+     * usage reasonable (~120 fps max). */
     if (ev->type == GUI_EVENT_MOUSE_MOVE) {
+        st->dirty = true;   /* cursor must always track the pointer */
         if (st->drag_mode == DRAG_MOVE && st->drag_win) {
             int32_t dx = ev->x - st->drag_origin_x;
             int32_t dy = ev->y - st->drag_origin_y;
@@ -360,7 +370,6 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             if (st->drag_win->y < 0) st->drag_win->y = 0;
             if (st->drag_win->y >= (int32_t)(fb->height - TASKBAR_H))
                 st->drag_win->y = (int32_t)(fb->height - TASKBAR_H) - 1;
-            st->dirty = true;   /* redraw only while dragging */
         } else if (st->drag_mode == DRAG_RESIZE && st->drag_win) {
             int32_t dx  = ev->x - st->drag_origin_x;
             int32_t dy  = ev->y - st->drag_origin_y;
@@ -370,9 +379,7 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             if (n_h < 40)  n_h = 40;
             st->drag_win->width  = (uint32_t)n_w;
             st->drag_win->height = (uint32_t)n_h;
-            st->dirty = true;   /* redraw only while resizing */
         }
-        /* No drag active: cursor moved but nothing changed — skip redraw. */
         return;
     }
 
@@ -432,8 +439,7 @@ static void wm_thread_main(void *arg)
         if (st.dirty) {
             wm_redraw_all(&st);
             /* Throttle: yield for ~8 ms after each redraw so the CPU
-             * isn't hammered and mouse events don't pile up faster
-             * than they can be consumed (the main cause of dancing). */
+             * isn't hammered and mouse events don't pile up. */
             sched_sleep(WM_FRAME_MS);
         }
     }
