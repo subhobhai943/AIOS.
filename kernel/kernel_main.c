@@ -27,7 +27,7 @@
 #include "gfx/font.h"
 #include "gui/input.h"
 #include "gui/input_mode.h"
-#include "gui/input_wiring.h"   /* FIX: was missing — needed for gui_wiring_activate() */
+#include "gui/input_wiring.h"
 #include "gui/wm.h"
 #include "shell/shell.h"
 
@@ -237,11 +237,16 @@ void kernel_main(uint32_t magic, uint32_t addr)
         }
     }
 
-    vga_puts_color("--- Phase 3.1: PCI ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    pci_init(); pci_dump();
+    /* ── PCI ─────────────────────────────────────────────────── */
+    pci_init();
     print_ok("PCI enumeration complete");
+    /* pci_dump() is intentionally NOT called here — it spams VGA with
+     * every device on every boot. To enable it, run: make debug. */
+#ifdef AIOS_DEBUG
+    pci_dump();
+#endif
 
-    vga_puts_color("--- Phase 5.3: ACPI ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    /* ── ACPI ─────────────────────────────────────────────────── */
     if (acpi_init()) {
         acpi_dump_info();
         print_ok("ACPI: RSDP/FADT parsed, power management ready");
@@ -249,7 +254,14 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("ACPI init failed — reboot/shutdown use fallbacks");
     }
 
-    vga_puts_color("--- Phase 3.2: AHCI ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    /* ── AHCI ────────────────────────────────────────────────────
+     * Requires a SATA disk to be attached to QEMU:
+     *   -drive id=disk0,file=aios_disk.img,format=raw,if=none
+     *   -device ahci,id=ahci0
+     *   -device ide-hd,drive=disk0,bus=ahci0.0
+     * Create the disk image first with: make disk
+     * The Makefile's 'run' target depends on $(DISK_IMG) automatically.
+     * ────────────────────────────────────────────────────────── */
     int ahci_ok   = 0;
     int ahci_port = -1;
     if (ahci_init() == 0) {
@@ -262,7 +274,10 @@ void kernel_main(uint32_t magic, uint32_t addr)
         print_warn("AHCI init failed or no controller present");
     }
 
-    vga_puts_color("--- Phase 3.3: FAT32 + VFS ---\n", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    /* ── FAT32 + VFS ────────────────────────────────────────────
+     * Mode 2 = FAT32-backed VFS (full read/write, backed by AHCI disk).
+     * Mode 1 = initrd-only VFS (read-only, no AHCI needed).
+     * ────────────────────────────────────────────────────────── */
     if (ahci_ok && ahci_port >= 0) {
         if (fat32_init(ahci_port, 0) == 0) {
             fat32_sector0_test();
@@ -276,16 +291,18 @@ void kernel_main(uint32_t magic, uint32_t addr)
                     else         print_warn("VFS: read 0 bytes");
                     vfs_close(fd);
                 } else {
-                    print_warn("VFS: TEST.TXT not found");
+                    print_warn("VFS: TEST.TXT not found (run: make disk)");
                 }
             }
             print_ok("FAT32 + VFS layer ready");
         } else {
-            print_warn("FAT32 init failed");
+            print_warn("FAT32 init failed — check disk image (run: make disk)");
+            vfs_init(1);
         }
     } else {
         vfs_init(1);
         print_warn("FAT32/VFS: no AHCI disk — initrd-only VFS active");
+        print_warn("  → To enable FAT32: run 'make disk' then 'make run'");
     }
 
     /* ── Scheduler ────────────────────────────────────────────────── */
@@ -309,9 +326,9 @@ void kernel_main(uint32_t magic, uint32_t addr)
     if (gui_framebuffer_ready) {
         gui_input_init(fb_get()->width, fb_get()->height);
         gui_input_enable();
-        gui_wiring_activate();   /* FIX: wire keyboard/mouse IRQs into GUI event queue */
+        gui_wiring_activate();
         gui_wm_start();
-        print_ok("GUI input wired and WM thread started");
+        print_ok("GUI input enabled and WM thread started");
     } else {
         print_ok("VGA text mode active — type 'startx' to launch GUI");
     }
@@ -319,8 +336,7 @@ void kernel_main(uint32_t magic, uint32_t addr)
     (void)timer_irq_ready;
 
     vga_puts_color(
-        "\nAIOS Phase 11 boot complete.\n"
-        "Shell is running. Type 'help' for commands.\n",
+        "\nPhase 11 boot complete.\n",
         VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     klog("Phase 11 boot complete.\r\n");
 
