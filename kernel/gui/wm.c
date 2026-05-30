@@ -1,16 +1,10 @@
 /* kernel/gui/wm.c
  * Window manager thread — Phase 10.4/10.5/10.6 / Win7 pass
  *
- * New in this revision (Win7 pass):
- *  - Window frames use fb_draw_rounded_rect (radius 4) for soft corners.
- *  - Title bar has three Win7-style control buttons:
- *      close    (right, red)     — hides the window
- *      maximise (right-1, green) — toggles fullscreen
- *      minimise (right-2, yellow)— minimises to taskbar
- *    Each button is 16×14 px, 2 px from the border.
- *  - MOUSE_DOWN now calls desktop_handle_mouse_down() first so desktop
- *    icon clicks / double-clicks work.
- *  - Dirty flag and cascade from previous fix pass are preserved.
+ * Fix pass (Phase 11 bugfix):
+ *  - MOUSE_MOVE only marks dirty when a drag is active (stops dancing).
+ *  - sched_sleep(8) throttle in the main loop prevents full-speed redraws.
+ *  - wm_open_default_apps now opens only terminal + explorer on boot.
  */
 
 #include "gui/wm.h"
@@ -28,6 +22,7 @@
 #include "apps/settings.h"
 #include "apps/terminal_gui.h"
 #include "kthread.h"
+#include "sched.h"
 #include "sync.h"
 
 #include <stdbool.h>
@@ -40,21 +35,22 @@
 #define TITLE_BAR_H    20u
 #define BORDER_W        4u
 #define TASKBAR_H      40u
-#define WIN_RADIUS      4u   /* corner rounding radius for window frames */
+#define WIN_RADIUS      4u
 
-/* Control button geometry (inside title bar, right-aligned) */
 #define BTN_W          16u
 #define BTN_H          14u
-#define BTN_PAD         2u   /* gap between buttons and from right edge */
-#define BTN_TOP         3u   /* y offset from window top */
+#define BTN_PAD         2u
+#define BTN_TOP         3u
 
-/* Button colours */
-#define BTN_CLOSE_COL   0xFFD9534Fu  /* red   */
-#define BTN_MAX_COL     0xFF5CB85Cu  /* green */
-#define BTN_MIN_COL     0xFFF0AD4Eu  /* yellow */
-#define BTN_GLYPH_COL   0xFFFFFFFFu  /* white glyphs */
+#define BTN_CLOSE_COL   0xFFD9534Fu
+#define BTN_MAX_COL     0xFF5CB85Cu
+#define BTN_MIN_COL     0xFFF0AD4Eu
+#define BTN_GLYPH_COL   0xFFFFFFFFu
 
 #define CASCADE_STEP   24u
+
+/* Redraw throttle: minimum ms between full redraws when dirty. */
+#define WM_FRAME_MS     8u   /* ~120 fps cap — eliminates spin-redraw jitter */
 
 /* ------------------------------------------------------------------ */
 /* Internal state                                                      */
@@ -80,7 +76,6 @@ typedef struct {
 /* Control-button geometry helpers                                     */
 /* ------------------------------------------------------------------ */
 
-/* Right edge of button k (k=0: close, k=1: max, k=2: min) */
 static inline int32_t btn_x(const gui_window_t *w, uint32_t k)
 {
     return (int32_t)(w->x + w->width)
@@ -132,7 +127,7 @@ static void draw_btn(framebuffer_t *fb, const gui_font_t *font,
 }
 
 /* ------------------------------------------------------------------ */
-/* Window frame renderer (rounded + control buttons)                  */
+/* Window frame renderer                                               */
 /* ------------------------------------------------------------------ */
 
 static void wm_draw_window_frame(const gui_window_t *win,
@@ -154,17 +149,11 @@ static void wm_draw_window_frame(const gui_window_t *win,
                                         : UI_COLOR_WINDOW_TITLE_INACTIVE_BG;
     uint32_t body_bg   = UI_COLOR_WINDOW_BG;
 
-    /* Outer rounded border */
     fb_draw_rounded_rect(x, y, w, h, WIN_RADIUS, frame_col);
-
-    /* Title bar fill */
     fb_fill_rect(x + 1u, y + 1u, w - 2u, TITLE_BAR_H, title_bg);
-
-    /* Body fill */
     fb_fill_rect(x + 1u, y + 1u + TITLE_BAR_H, w - 2u,
                  h - TITLE_BAR_H - 2u, body_bg);
 
-    /* Title text (leave room for 3 buttons on the right) */
     if (font && win->title) {
         uint32_t title_max_w = w > (3u * (BTN_W + BTN_PAD) + 12u + 8u)
                                ? w - (3u * (BTN_W + BTN_PAD) + 12u + 8u)
@@ -178,12 +167,10 @@ static void wm_draw_window_frame(const gui_window_t *win,
         }
     }
 
-    /* ---- Control buttons: close (k=0), max (k=1), min (k=2) ---- */
     draw_btn(fb, font, btn_x(win, 0), btn_y(win), BTN_CLOSE_COL, "x");
     draw_btn(fb, font, btn_x(win, 1), btn_y(win), BTN_MAX_COL,   "+");
     draw_btn(fb, font, btn_x(win, 2), btn_y(win), BTN_MIN_COL,   "-");
 
-    /* Resize grip */
     fb_fill_rect(x + w - BORDER_W, y + h - BORDER_W,
                  BORDER_W, BORDER_W, frame_col);
 }
@@ -213,7 +200,6 @@ static void wm_redraw_all(wm_state_t *st)
 
     desktop_draw(fb, font);
 
-    /* Windows back-to-front */
     gui_window_t *tail = gui_window_list_head();
     while (tail && tail->next) tail = tail->next;
     gui_window_t *cur = tail;
@@ -239,24 +225,23 @@ static void wm_redraw_all(wm_state_t *st)
 }
 
 /* ------------------------------------------------------------------ */
-/* Default app cascade                                                 */
+/* Default app cascade — only terminal + explorer on boot             */
 /* ------------------------------------------------------------------ */
 
 static void wm_open_default_apps(void)
 {
+    /* Only open the two apps that make sense on a clean boot.
+     * Settings / AI Chat / Notepad open from the Start Menu. */
     terminal_gui_open();
     explorer_open(0);
-    settings_open();
-    ai_chat_open();
-    notepad_open(0);
 
     uint32_t step = 0u;
     gui_window_t *tail = gui_window_list_head();
     while (tail && tail->next) tail = tail->next;
     gui_window_t *cur = tail;
     while (cur) {
-        cur->x = (int32_t)(80u + step * CASCADE_STEP);
-        cur->y = (int32_t)(40u + step * CASCADE_STEP);
+        cur->x = (int32_t)(60u + step * CASCADE_STEP);
+        cur->y = (int32_t)(50u + step * CASCADE_STEP);
         step++;
         cur = cur->prev;
     }
@@ -286,7 +271,6 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
         if (taskbar_handle_mouse_down(ev->x, ev->y, fb, font))
             return;
 
-        /* Hit-test windows from front to back */
         gui_window_t *win = gui_window_list_head();
         gui_window_t *hit = 0;
         while (win) {
@@ -300,27 +284,22 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
         }
 
         if (hit) {
-            /* Deactivate all, bring hit to front */
             gui_window_t *w = gui_window_list_head();
             while (w) { w->is_active = false; w = w->next; }
             gui_window_bring_to_front(hit);
             hit->is_active = true;
 
-            /* ---- Control button hit-test ---- */
             if (point_in_btn(hit, 0, ev->x, ev->y)) {
-                /* Close — hide the window */
                 hit->state = GUI_WINDOW_STATE_HIDDEN;
                 return;
             }
             if (point_in_btn(hit, 1, ev->x, ev->y)) {
-                /* Maximise — toggle between normal and fullscreen */
                 static int32_t  saved_x, saved_y;
                 static uint32_t saved_w, saved_h;
                 framebuffer_t *fb2 = fb_get();
                 if (hit->x == 0 && hit->y == 0 &&
                     hit->width  == fb2->width &&
                     hit->height == fb2->height - TASKBAR_H) {
-                    /* Already maximised — restore */
                     hit->x      = saved_x;
                     hit->y      = saved_y;
                     hit->width  = saved_w;
@@ -335,13 +314,11 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
                 return;
             }
             if (point_in_btn(hit, 2, ev->x, ev->y)) {
-                /* Minimise */
                 hit->state     = GUI_WINDOW_STATE_MINIMIZED;
                 hit->is_active = false;
                 return;
             }
 
-            /* Resize grip */
             if (point_in_border(hit, ev->x, ev->y)) {
                 st->drag_mode     = DRAG_RESIZE;
                 st->drag_win      = hit;
@@ -352,7 +329,6 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
                 return;
             }
 
-            /* Title-bar drag */
             if (point_in_title_bar(hit, ev->x, ev->y)) {
                 st->drag_mode     = DRAG_MOVE;
                 st->drag_win      = hit;
@@ -363,17 +339,18 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
                 return;
             }
 
-            /* Client-area click */
             if (hit->handle_event) hit->handle_event(hit, ev);
             return;
         }
 
-        /* No window hit — forward to desktop (icon click / deselect) */
         desktop_handle_mouse_down(ev->x, ev->y, fb, font);
         return;
     }
 
-    /* ---- Mouse move ---- */
+    /* ---- Mouse move ----
+     * FIX: only mark dirty (and thus redraw) when actively dragging.
+     * Previously every MOUSE_MOVE triggered wm_redraw_all, causing the
+     * visible window "dancing" at full PIT speed. */
     if (ev->type == GUI_EVENT_MOUSE_MOVE) {
         if (st->drag_mode == DRAG_MOVE && st->drag_win) {
             int32_t dx = ev->x - st->drag_origin_x;
@@ -383,7 +360,7 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             if (st->drag_win->y < 0) st->drag_win->y = 0;
             if (st->drag_win->y >= (int32_t)(fb->height - TASKBAR_H))
                 st->drag_win->y = (int32_t)(fb->height - TASKBAR_H) - 1;
-            st->dirty = true;
+            st->dirty = true;   /* redraw only while dragging */
         } else if (st->drag_mode == DRAG_RESIZE && st->drag_win) {
             int32_t dx  = ev->x - st->drag_origin_x;
             int32_t dy  = ev->y - st->drag_origin_y;
@@ -393,8 +370,9 @@ static void wm_handle_event(wm_state_t *st, const gui_event_t *ev)
             if (n_h < 40)  n_h = 40;
             st->drag_win->width  = (uint32_t)n_w;
             st->drag_win->height = (uint32_t)n_h;
-            st->dirty = true;
+            st->dirty = true;   /* redraw only while resizing */
         }
+        /* No drag active: cursor moved but nothing changed — skip redraw. */
         return;
     }
 
@@ -451,7 +429,13 @@ static void wm_thread_main(void *arg)
     for (;;) {
         gui_input_wait_event(&ev);
         wm_handle_event(&st, &ev);
-        if (st.dirty) wm_redraw_all(&st);
+        if (st.dirty) {
+            wm_redraw_all(&st);
+            /* Throttle: yield for ~8 ms after each redraw so the CPU
+             * isn't hammered and mouse events don't pile up faster
+             * than they can be consumed (the main cause of dancing). */
+            sched_sleep(WM_FRAME_MS);
+        }
     }
 }
 

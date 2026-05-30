@@ -2,10 +2,11 @@
  *
  * GUI Terminal — windowed view of the AIOS shell.
  *
- * This provides a graphical 80x25 character grid that mirrors the
- * classic VGA terminal. For now, we implement a single-instance
- * GUI terminal; terminal.c can be taught to call terminal_gui_*()
- * adapters when this instance exists.
+ * Fix (Phase 11 bugfix):
+ *   tgui_handle_event previously compared ev->keycode against raw PS/2
+ *   scancodes (0x1C for Enter, 0x0E for Backspace).  input_bridge.c
+ *   translates scancodes to ASCII *before* enqueuing, so ev->keycode
+ *   carries the ASCII value.  Fixed comparisons to use ASCII characters.
  */
 
 #include <stdint.h>
@@ -24,9 +25,6 @@
 #define TGUI_FONT_H 16
 #define PADDING 4
 
-/* Colour mapping: use simple white-on-black style; ignore per-cell
- * fg/bg for now, but keep arrays so we can style later.
- */
 #define TGUI_COL_BG   0xFF000000u
 #define TGUI_COL_FG   0xFFFFFFFFu
 #define TGUI_COL_CUR  0xFF00FF00u
@@ -38,7 +36,6 @@ static void tg_memset(void *p, uint8_t v, size_t n)
     uint8_t *b = (uint8_t*)p; while (n--) *b++ = v;
 }
 
-/* Scroll buffer up by one line. */
 static void tgui_scroll_up(terminal_gui_t *tg)
 {
     for (uint32_t r = 1; r < TGUI_ROWS; r++) {
@@ -60,17 +57,11 @@ static void tgui_put_char_raw(terminal_gui_t *tg, char c)
 {
     if (c == '\n') {
         tg->cur_col = 0;
-        if (tg->cur_row + 1 >= TGUI_ROWS) {
-            tgui_scroll_up(tg);
-        } else {
-            tg->cur_row++;
-        }
+        if (tg->cur_row + 1 >= TGUI_ROWS) tgui_scroll_up(tg);
+        else tg->cur_row++;
         return;
     }
-    if (c == '\r') {
-        tg->cur_col = 0;
-        return;
-    }
+    if (c == '\r') { tg->cur_col = 0; return; }
     if (c == '\t') {
         uint8_t next = (uint8_t)((tg->cur_col + 4) & ~3u);
         if (next >= TGUI_COLS) {
@@ -97,7 +88,6 @@ static void tgui_put_char_raw(terminal_gui_t *tg, char c)
     tg->cells[tg->cur_row][tg->cur_col] = c;
     tg->fg[tg->cur_row][tg->cur_col] = tg->cur_fg;
     tg->bg[tg->cur_row][tg->cur_col] = tg->cur_bg;
-
     tg->cur_col++;
 }
 
@@ -116,11 +106,8 @@ static void tgui_fill_rect(framebuffer_t *fb, int x, int y, int w, int h, uint32
 
 static void tgui_draw_char(framebuffer_t *fb,
                            const gui_font_t *font,
-                           int x,
-                           int y,
-                           char c,
-                           uint32_t fg,
-                           uint32_t bg)
+                           int x, int y, char c,
+                           uint32_t fg, uint32_t bg)
 {
     font_draw_char(fb, font, (uint32_t)x, (uint32_t)y, c, fg, bg);
 }
@@ -139,16 +126,13 @@ static void tgui_draw(gui_window_t *win, framebuffer_t *fb)
     for (uint32_t r = 0; r < TGUI_ROWS; r++) {
         for (uint32_t c = 0; c < TGUI_COLS; c++) {
             char ch = tg->cells[r][c];
-            uint32_t fg = TGUI_COL_FG;
-            uint32_t bg = TGUI_COL_BG;
             tgui_draw_char(fb, font,
                            x0 + (int)c * TGUI_FONT_W,
                            y0 + (int)r * TGUI_FONT_H,
-                           ch ? ch : ' ', fg, bg);
+                           ch ? ch : ' ', TGUI_COL_FG, TGUI_COL_BG);
         }
     }
 
-    /* Draw cursor as a block. */
     int cx = x0 + (int)tg->cur_col * TGUI_FONT_W;
     int cy = y0 + (int)tg->cur_row * TGUI_FONT_H;
     tgui_fill_rect(fb, cx, cy + TGUI_FONT_H - 2, TGUI_FONT_W, 2, TGUI_COL_CUR);
@@ -162,14 +146,32 @@ static void tgui_handle_event(gui_window_t *win, const gui_event_t *ev)
     if (!g_tgui || !ev) return;
 
     if (ev->type == GUI_EVENT_KEY_DOWN) {
+        /*
+         * FIX: ev->keycode carries the ASCII value translated by
+         * input_bridge.c (ke->ascii when non-zero, else scancode).
+         * Previous code compared against raw PS/2 scancodes (0x1C,
+         * 0x0E) which are never in the ASCII printable range, so all
+         * key events were silently dropped.
+         *
+         * Correct ASCII values:
+         *   Enter     = '\n' = 0x0A
+         *   Backspace = '\b' = 0x08
+         *   Printable = 0x20 .. 0x7E
+         */
         uint8_t key = ev->keycode;
-        if (key == '\r' || key == '\n' || key == 0x1Cu) {
+
+        if (key == '\n' || key == '\r') {
+            /* Enter: newline + re-print prompt */
             terminal_gui_write("\nAIOS> ");
-        } else if (key == '\b' || key == 0x0Eu) {
+        } else if (key == '\b') {
+            /* Backspace: erase last character */
             terminal_gui_write_char('\b');
-        } else if (key >= 0x20u && key < 0x7Fu) {
+        } else if (key >= 0x20u && key <= 0x7Eu) {
+            /* Printable ASCII */
             terminal_gui_write_char((char)key);
         }
+        /* Ignore all other keycodes (function keys, arrows via scancode
+         * fallback, modifiers, etc.). */
     }
 }
 
@@ -233,17 +235,13 @@ void terminal_gui_write_char(char c)
 void terminal_gui_write(const char *s)
 {
     if (!g_tgui || !s) return;
-    while (*s) {
-        tgui_put_char_raw(g_tgui, *s++);
-    }
+    while (*s) tgui_put_char_raw(g_tgui, *s++);
 }
 
 void terminal_gui_write_len(const char *s, size_t len)
 {
     if (!g_tgui || !s) return;
-    for (size_t i = 0; i < len; i++) {
-        tgui_put_char_raw(g_tgui, s[i]);
-    }
+    for (size_t i = 0; i < len; i++) tgui_put_char_raw(g_tgui, s[i]);
 }
 
 void terminal_gui_move_cursor(uint8_t col, uint8_t row)
@@ -304,14 +302,5 @@ void terminal_gui_clear_screen(void)
     g_tgui->cur_row = 0;
 }
 
-uint8_t terminal_gui_cursor_col(void)
-{
-    if (!g_tgui) return 0;
-    return g_tgui->cur_col;
-}
-
-uint8_t terminal_gui_cursor_row(void)
-{
-    if (!g_tgui) return 0;
-    return g_tgui->cur_row;
-}
+uint8_t terminal_gui_cursor_col(void) { return g_tgui ? g_tgui->cur_col : 0; }
+uint8_t terminal_gui_cursor_row(void) { return g_tgui ? g_tgui->cur_row : 0; }
